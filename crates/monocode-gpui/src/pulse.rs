@@ -14,6 +14,8 @@ use gpui::{
 };
 use std::{
     collections::HashMap,
+    panic::Location,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -46,7 +48,12 @@ struct Lease {
     /// Painted a loop since the clock last notified it.
     painted: bool,
     on_tick: Option<FrameCallback>,
+    /// Where the loop leased the clock, for the frame readout.
+    location: &'static Location<'static>,
 }
+
+/// Views the clock asked to repaint since the last readout, for `frame_log`.
+static NOTIFIES: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 struct Clock {
@@ -60,23 +67,32 @@ impl Global for Clock {}
 /// Keeps the view being drawn repainting at `rate`. Call it while rendering
 /// or painting a loop, every time the loop is drawn. Returns false, and
 /// leases nothing, under reduced motion: draw the loop's resting frame.
+#[track_caller]
 pub(crate) fn request(rate: Rate, window: &Window, cx: &mut App) -> bool {
-    request_inner(rate, window, cx, None)
+    request_inner(rate, Location::caller(), window, cx, None)
 }
 
 /// Stream presentation uses the same coalesced 30Hz wakeup as decorative
 /// loops, advancing its state before notifying rather than spawning a timer.
+#[track_caller]
 pub(crate) fn request_frame(
     rate: Rate,
     window: &Window,
     cx: &mut App,
     on_tick: impl FnOnce(&mut App) + 'static,
 ) -> bool {
-    request_inner(rate, window, cx, Some(Box::new(on_tick)))
+    request_inner(
+        rate,
+        Location::caller(),
+        window,
+        cx,
+        Some(Box::new(on_tick)),
+    )
 }
 
 fn request_inner(
     rate: Rate,
+    location: &'static Location<'static>,
     window: &Window,
     cx: &mut App,
     mut on_tick: Option<FrameCallback>,
@@ -94,6 +110,7 @@ fn request_inner(
             if on_tick.is_some() {
                 lease.on_tick = on_tick.take();
             }
+            lease.location = location;
             if lease.rate.stride() > rate.stride() {
                 lease.rate = rate;
             }
@@ -102,6 +119,7 @@ fn request_inner(
             rate,
             painted: true,
             on_tick,
+            location,
         });
     if !clock.running {
         clock.running = true;
@@ -161,6 +179,7 @@ fn tick(cx: &mut App) -> bool {
         clock.running = false;
         return false;
     }
+    NOTIFIES.fetch_add(due.len() as u64, Ordering::Relaxed);
     for (view, callback) in due {
         if let Some(callback) = callback {
             callback(cx);
@@ -171,7 +190,53 @@ fn tick(cx: &mut App) -> bool {
     true
 }
 
-fn app_active(cx: &mut App) -> bool {
+/// The clock, as the frame readout sees it.
+pub(crate) struct Snapshot {
+    pub(crate) running: bool,
+    pub(crate) tick: u64,
+    pub(crate) notifies: u64,
+    pub(crate) leases: Vec<LeaseSnapshot>,
+}
+
+pub(crate) struct LeaseSnapshot {
+    pub(crate) view: EntityId,
+    pub(crate) rate: Rate,
+    pub(crate) painted: bool,
+    pub(crate) location: &'static Location<'static>,
+}
+
+/// Takes the counters since the last snapshot and lists the live leases, so a
+/// clock that never parks can be traced back to the element keeping it awake.
+pub(crate) fn snapshot(cx: &App) -> Snapshot {
+    let notifies = NOTIFIES.swap(0, Ordering::Relaxed);
+    let Some(clock) = cx.try_global::<Clock>() else {
+        return Snapshot {
+            running: false,
+            tick: 0,
+            notifies,
+            leases: Vec::new(),
+        };
+    };
+    let mut leases: Vec<LeaseSnapshot> = clock
+        .leases
+        .iter()
+        .map(|(view, lease)| LeaseSnapshot {
+            view: *view,
+            rate: lease.rate,
+            painted: lease.painted,
+            location: lease.location,
+        })
+        .collect();
+    leases.sort_by_key(|lease| (lease.location.file(), lease.location.line()));
+    Snapshot {
+        running: clock.running,
+        tick: clock.tick,
+        notifies,
+        leases,
+    }
+}
+
+pub(crate) fn app_active(cx: &mut App) -> bool {
     cx.windows().into_iter().any(|window| {
         window
             .update(cx, |_, window, _| window.is_window_active())
@@ -181,6 +246,7 @@ fn app_active(cx: &mut App) -> bool {
 
 /// A repeating animation on the shared clock: `build` gets the fraction of
 /// `period` elapsed and returns the frame. Reduced motion draws phase zero.
+#[track_caller]
 pub(crate) fn looping<E: IntoElement>(
     id: impl Into<ElementId>,
     period: Duration,
@@ -191,6 +257,7 @@ pub(crate) fn looping<E: IntoElement>(
         id: id.into(),
         period,
         rate,
+        location: Location::caller(),
         build: Some(Box::new(move |phase| build(phase).into_any_element())),
     }
 }
@@ -199,6 +266,7 @@ pub(crate) struct Looping {
     id: ElementId,
     period: Duration,
     rate: Rate,
+    location: &'static Location<'static>,
     build: Option<Box<dyn FnOnce(f32) -> AnyElement>>,
 }
 impl IntoElement for Looping {
@@ -223,7 +291,7 @@ impl Element for Looping {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, AnyElement) {
-        let phase = if request(self.rate, window, cx) {
+        let phase = if request_inner(self.rate, self.location, window, cx, None) {
             phase(self.period, cx)
         } else {
             0.

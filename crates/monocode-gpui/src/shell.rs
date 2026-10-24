@@ -7745,6 +7745,7 @@ fn enter_from(leaf: &LayoutLeaf) -> (Edge, Rect) {
 }
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::frame_log::count_render();
         self.keep_visible_idle_agents(cx);
         self.sync_ui_scale(window, cx);
         if let Some(id) = self.pending_composer_focus.take()

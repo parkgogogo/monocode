@@ -26,6 +26,7 @@ mod file_editor;
 mod file_icons;
 mod fixtures;
 mod fonts;
+mod frame_log;
 mod fs_watch;
 mod git_cache;
 mod git_graph;
@@ -398,6 +399,7 @@ fn main() {
             dev_reload::install(cx);
             cx.set_global(title_raster);
             image_memory::init(cx);
+            frame_log::start(cx);
             #[cfg(target_os = "macos")]
             memory_log::start(cx);
             input::bind(cx);
