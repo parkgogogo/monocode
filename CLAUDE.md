@@ -89,6 +89,7 @@ ln -s ~/labs/monocode/skills/<名字> ~/.claude/skills/<名字>
 | skill | 作用 |
 |---|---|
 | `monocode-import` | 把 Claude Code、Codex 或 Pi 的会话（包括当前对话）导入 MonoCode，聊天记录完整显示，下一条消息接着原会话继续。会写真实数据库，用之前先看它的 `SKILL.md` |
+| `monocode-handoff` | 把当前会话里的某一件事交给 MonoCode 里新建的会话（任意 agent），用聚焦的交接说明代替整段对话。需要当前会话开启 `/operator`；默认存成草稿，用户确认后再发送 |
 
 skill 的脚本依赖 MonoCode 的内部数据格式。和作者同步后，如果 `crates/monocode-core/src/store/shared/blocks.rs` 或 `sessions` 表结构有改动，要检查 skill 是否需要跟着改，并跑一遍它的测试：`python3 -I -m unittest discover -s skills/monocode-import/scripts`。
 
