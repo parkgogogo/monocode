@@ -68,6 +68,7 @@ build 分支 2026-10-24 以前叫 `mc/migrate-monocode-to-gpui`，和作者分�
 | 提交 / 文件 | 内容 | 为什么不提 |
 |---|---|---|
 | `CLAUDE.md` | 本文件 | 只是我们自己的工作约定 |
+| `AGENTS.md` | 只有一句 `read CLAUDE.md`，让 Codex 等读 AGENTS.md 的 agent 也遵守本文件 | 同上 |
 | `410317ae` / `crates/monocode-gpui/src/frame_log.rs` | `MONOCODE_FRAME_LOG` 重绘帧数读数 | 只用于本地性能排查 |
 | `skills/` | 我们自己的 Claude Code skill | 只给自己用，见下面的 “Skills” |
 
