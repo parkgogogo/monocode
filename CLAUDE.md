@@ -1,6 +1,6 @@
 # 本 Fork 的工作约定
 
-这份文件只存在于我们自己的 build 分支 `mc/migrate-monocode-to-gpui`（origin），属于 custom 提交，**永远不要提给作者**。
+这份文件只存在于我们自己的 build 分支 `build`（origin），属于 custom 提交，**永远不要提给作者**。
 
 计划和说明用中文，代码、命令、标识符保持原样。后续迭代一律基于 GPUI 原生版（`crates/monocode-gpui`）。
 
@@ -22,10 +22,12 @@
 upstream/mc/migrate-monocode-to-gpui   作者基线
    ├─ feat/xxx、fix/xxx                 开发分支：从作者基线最新代码切出，做完提 PR 给作者
    │     └─ 同时合进 ↓
-   └─ mc/migrate-monocode-to-gpui      build 分支（跟踪 origin）
+   └─ build                             build 分支（跟踪 origin/build）
          = 作者基线 + 所有开发分支 + custom 提交
          → 日常使用的 release 版都从这里 build
 ```
+
+build 分支 2026-10-24 以前叫 `mc/migrate-monocode-to-gpui`，和作者分支同名，容易弄混，所以改名为 `build`。本地和 origin 上都不要再建叫 `mc/migrate-monocode-to-gpui` 的分支，需要作者分支时一律写全 `upstream/mc/migrate-monocode-to-gpui`。
 
 ## 开发流程
 
@@ -83,11 +85,11 @@ upstream/mc/migrate-monocode-to-gpui   作者基线
    ```sh
    cd ~/labs/monocode
    git status --porcelain   # 必须是干净的；不干净就停止，报告给用户
-   git switch mc/migrate-monocode-to-gpui
+   git switch build
    git fetch upstream && git fetch origin
    git log --oneline HEAD..upstream/mc/migrate-monocode-to-gpui
    ```
-   没有新提交就直接结束。如果 `origin` 上的 build 分支比本地新，先 `git merge --ff-only origin/mc/migrate-monocode-to-gpui`；fast-forward 不了就停止，报告给用户。
+   没有新提交就直接结束。如果 `origin` 上的 build 分支比本地新，先 `git merge --ff-only origin/build`；fast-forward 不了就停止，报告给用户。
 2. **打备份标签**，方便回滚：
    ```sh
    git tag backup/sync-$(date +%Y%m%d-%H%M)
@@ -112,7 +114,7 @@ upstream/mc/migrate-monocode-to-gpui   作者基线
      - 判断方法：只看报错的文件里有没有我们改过的。拿不准的，在作者基线的干净 worktree 上跑一次对比。
      - 不要去格式化作者的这些文件。`cargo fmt` 碰到它们，就用 `git checkout -- <文件>` 还原。
    - 检查不通过就不推送，报告给用户。修复的代码可以先留在本地，等用户确认。
-6. **推送并报告**：检查通过后执行 `git push origin mc/migrate-monocode-to-gpui`，然后给用户一份摘要，包括：
+6. **推送并报告**：检查通过后执行 `git push origin build`，然后给用户一份摘要，包括：
    - 作者这次的新提交列表
    - 解决了哪些冲突、怎么解决的
    - 检查结果
