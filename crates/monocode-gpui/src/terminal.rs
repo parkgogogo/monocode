@@ -706,7 +706,9 @@ impl Element for Grid {
         window: &mut Window,
         cx: &mut App,
     ) -> Painted {
-        let font_size = px(FONT_SIZE);
+        // Cells follow the code font size; `resize` reflows the grid and PTY.
+        let scale = crate::fonts::code_scale(cx);
+        let font_size = px(FONT_SIZE * scale);
         let base = mono_font();
         let text_system = window.text_system().clone();
         let font_id = text_system.resolve_font(&base);
@@ -716,7 +718,7 @@ impl Element for Grid {
         let line_height = (text_system.ascent(font_id, font_size)
             + text_system.descent(font_id, font_size).abs())
         .ceil()
-        .max(px(14.));
+        .max(px(14. * scale));
         let origin = point(bounds.left() + px(PADDING), bounds.top() + px(PADDING / 2.));
         let columns =
             (((bounds.size.width - px(PADDING * 2.)) / cell_width).floor() as usize).max(2);
@@ -968,7 +970,7 @@ fn cell_rect(
 }
 
 fn mono_font() -> Font {
-    gpui::font(crate::markdown::MONO)
+    gpui::font(crate::fonts::CODE)
 }
 fn selection_fill() -> Hsla {
     crate::theme::text_selection()

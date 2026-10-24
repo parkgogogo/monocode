@@ -555,6 +555,19 @@ impl TextStyle {
         self.line_height.to_pixels(self.font_size, rem_size).round()
     }
 
+    /// Multiply absolute font sizes and line heights by `scale`, as a font
+    /// alias's size scale does. Fractional line heights already follow the
+    /// font size.
+    pub fn scale_absolute_sizes(&mut self, scale: f32) {
+        if scale == 1. {
+            return;
+        }
+        self.font_size = scale_absolute(self.font_size, scale);
+        if let DefiniteLength::Absolute(length) = self.line_height {
+            self.line_height = DefiniteLength::Absolute(scale_absolute(length, scale));
+        }
+    }
+
     /// Convert this text style into a [`TextRun`], for the given length of the text.
     pub fn to_run(&self, len: usize) -> TextRun {
         TextRun {
@@ -1325,6 +1338,13 @@ impl From<Position> for taffy::style::Position {
             Position::Relative => Self::Relative,
             Position::Absolute => Self::Absolute,
         }
+    }
+}
+
+fn scale_absolute(length: AbsoluteLength, scale: f32) -> AbsoluteLength {
+    match length {
+        AbsoluteLength::Pixels(pixels) => AbsoluteLength::Pixels(pixels * scale),
+        AbsoluteLength::Rems(rems) => AbsoluteLength::Rems(crate::Rems(rems.0 * scale)),
     }
 }
 

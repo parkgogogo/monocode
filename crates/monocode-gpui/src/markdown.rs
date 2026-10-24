@@ -65,11 +65,6 @@ impl Tone {
         }
     }
 }
-pub(crate) const MONO: &str = if cfg!(target_os = "macos") {
-    "Menlo"
-} else {
-    "monospace"
-};
 const PART_BYTES: usize = 2048;
 const PART_LINES: usize = 24;
 
@@ -524,7 +519,7 @@ fn rich_inline(
                         .search
                         .map(search::search_background)
                         .unwrap_or_else(|| content(0.08)))
-                    .font_family(MONO)
+                    .font_family(crate::fonts::CODE)
                     .text_size(px(font_size * 0.8))
                     .line_height(px(24.))
                     .text_color(content(1.))
@@ -723,6 +718,7 @@ pub(crate) fn body_selected(
     let mut body = div()
         .w_full()
         .min_w_0()
+        .font_family(crate::fonts::CONTENT)
         .text_size(px(14.))
         .line_height(px(24.));
     match &row.part {
@@ -775,7 +771,7 @@ pub(crate) fn body_selected(
             } else {
                 child
             };
-            body.font_family(MONO)
+            body.font_family(crate::fonts::CODE)
                 .text_color(content(0.78))
                 .child(child)
                 .into_any_element()
@@ -923,7 +919,7 @@ pub(crate) fn code_lines_selected(
                 .min_w_full()
                 .line_height(px(20.))
                 .text_size(px(12.))
-                .font_family(MONO)
+                .font_family(crate::fonts::CODE)
                 .when(fence.numbered, |d| {
                     d.child(
                         div()

@@ -351,6 +351,7 @@ impl Shell {
         crate::settings::apply_keybindings(&self.workspace.preferences, cx);
         // After the keymap, so the menu shows rebound shortcuts.
         crate::app_menu::install(&self.workspace.preferences, cx);
+        crate::fonts::apply(&self.workspace.preferences, cx);
         cx.set_global(self.workspace.preferences.clone());
         self.sync_right_panel(cx);
         if let Some(center) = crate::accounts::get(cx) {
@@ -729,6 +730,45 @@ mod tests {
         let dark = visual.debug_bounds("settings-theme-dark").unwrap();
         visual.simulate_click(dark.center(), Default::default());
         visual.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn font_preferences_persist_and_retarget_every_alias(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.open_settings(Section::Appearance, w, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let before = cx.update(|cx| crate::fonts::generation(cx));
+        window
+            .update(cx, |shell, _, cx| {
+                let mut prefs = shell.workspace.preferences.clone();
+                prefs.ui_font_size = 16;
+                prefs.code_font_family = Some("Menlo".into());
+                prefs.code_font_size = 15;
+                let view = shell.settings.clone().unwrap();
+                view.update(cx, |_, cx| cx.emit(SettingsEvent::Changed(Box::new(prefs))));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let saved = shell.latest_state.lock().unwrap().clone();
+                let restored: Workspace = serde_json::from_str(&saved).unwrap();
+                assert_eq!(restored.preferences.ui_font_size, 16);
+                assert_eq!(
+                    restored.preferences.code_font_family.as_deref(),
+                    Some("Menlo")
+                );
+                let text = cx.text_system();
+                assert_eq!(text.font_size_scale(crate::fonts::UI), 16. / 14.);
+                assert_eq!(text.font_size_scale(crate::fonts::CONTENT), 16. / 14.);
+                assert_eq!(text.font_size_scale(crate::fonts::CODE), 15. / 12.);
+                assert!(crate::fonts::generation(cx) > before);
+            })
+            .unwrap();
     }
 
     #[gpui::test]

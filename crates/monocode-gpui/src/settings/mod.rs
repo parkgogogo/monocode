@@ -2,6 +2,7 @@
 //! src/app/shell/SettingsRail.tsx: the Settings pages, their rail and the
 //! breadcrumb, search and actions the inset layout puts in its title bar.
 mod data;
+mod font_controls;
 mod keymap;
 #[cfg(test)]
 mod layout_tests;
@@ -252,6 +253,7 @@ pub(crate) struct SettingsView {
     accent_custom: Entity<Input>,
     accent_custom_open: bool,
     accent_anchor: AnchorSlot,
+    fonts: font_controls::State,
     mobile: pages::MobileState,
     _subscriptions: Vec<Subscription>,
 }
@@ -387,6 +389,7 @@ impl SettingsView {
             accent_custom,
             accent_custom_open: false,
             accent_anchor: AnchorSlot::default(),
+            fonts: font_controls::State::new(cx),
             mobile: pages::MobileState::default(),
             _subscriptions: subscriptions,
         };

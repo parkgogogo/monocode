@@ -294,6 +294,8 @@ pub(crate) struct DiffView {
     scroll_x: f32,
     viewport: Rc<Cell<Option<Bounds<Pixels>>>>,
     char_width: Cell<Option<f32>>,
+    /// The code font's size scale; code rows grow with it.
+    code_scale: f32,
     hovered: Option<usize>,
     pending: Option<usize>,
     focus_id: Option<SharedString>,
@@ -347,6 +349,7 @@ impl DiffView {
             scroll_x: 0.,
             viewport: Rc::default(),
             char_width: Cell::new(None),
+            code_scale: 1.,
             hovered: None,
             pending: None,
             focus_id: None,
@@ -462,6 +465,11 @@ impl DiffView {
             if expanded {
                 rows.extend(body.rows.iter().map(|row| Row {
                     file: index,
+                    height: if matches!(row.kind, RowKind::Line { .. }) {
+                        self.line()
+                    } else {
+                        row.height
+                    },
                     ..row.clone()
                 }));
                 columns = columns.max(body.columns);
@@ -669,6 +677,10 @@ impl DiffView {
         self.rebuild(cx);
     }
 
+    /// A code row's height at the current code font size.
+    fn line(&self) -> f32 {
+        LINE * self.code_scale
+    }
     fn gutter_width(&self) -> f32 {
         self.number_width * 2. + 24. + 3.
     }
@@ -677,7 +689,7 @@ impl DiffView {
             return width;
         }
         let mut font = window.text_style().font();
-        font.family = crate::markdown::MONO.into();
+        font.family = crate::fonts::CODE.into();
         let run = gpui::TextRun {
             len: 10,
             font,
@@ -688,7 +700,12 @@ impl DiffView {
         };
         let width = window
             .text_system()
-            .shape_line("0000000000".into(), px(CODE_SIZE), &[run], None)
+            .shape_line(
+                "0000000000".into(),
+                px(CODE_SIZE * self.code_scale),
+                &[run],
+                None,
+            )
             .width
             .as_f32()
             / 10.;
@@ -1100,7 +1117,7 @@ impl DiffView {
                         .min_w_0()
                         .truncate()
                         .px_3()
-                        .font_family(crate::markdown::MONO)
+                        .font_family(crate::fonts::CODE)
                         .text_size(px(11.))
                         .text_color(content(0.5))
                         .child(text),
@@ -1109,7 +1126,7 @@ impl DiffView {
             RowKind::Line { block, line, stage } => {
                 let file = &self.files[row.file];
                 let Some(l) = file.blocks.get(block).and_then(|b| b.lines().get(line)) else {
-                    return div().h(px(LINE)).into_any_element();
+                    return div().h(px(self.line())).into_any_element();
                 };
                 let (added, removed) = (l.kind == LineKind::Add, l.kind == LineKind::Del);
                 let ink: Option<Hsla> = if added {
@@ -1158,7 +1175,7 @@ impl DiffView {
                 let _ = window;
                 div()
                     .id(("diff-line", ix))
-                    .h(px(LINE))
+                    .h(px(self.line()))
                     .w_full()
                     .flex()
                     .line_height(px(LINE))
@@ -1282,7 +1299,7 @@ impl DiffView {
                                     .pl_3()
                                     .pr_6()
                                     .whitespace_nowrap()
-                                    .font_family(crate::markdown::MONO)
+                                    .font_family(crate::fonts::CODE)
                                     .text_size(px(CODE_SIZE))
                                     .text_color(content(0.92))
                                     .child(StyledText::new(text).with_highlights(styles)),
@@ -1456,6 +1473,12 @@ fn tool_button(
 
 impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let code_scale = crate::fonts::code_scale(cx);
+        if self.code_scale != code_scale {
+            self.code_scale = code_scale;
+            self.char_width.set(None);
+            self.rebuild(cx);
+        }
         if self.files.is_empty() {
             return div()
                 .id("diff-review")
@@ -1521,7 +1544,7 @@ impl Render for DiffView {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .font_family(crate::markdown::MONO)
+                                    .font_family(crate::fonts::CODE)
                                     .text_size(px(11.))
                                     .text_color(content(0.55))
                                     .child(location),

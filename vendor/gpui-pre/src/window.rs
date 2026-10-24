@@ -2476,6 +2476,7 @@ impl Window {
         for refinement in &self.text_style_stack {
             style.refine(refinement);
         }
+        style.scale_absolute_sizes(self.text_system.font_size_scale(&style.font_family));
         style
     }
 

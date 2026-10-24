@@ -83,7 +83,7 @@ fn swatch(surface: u32, panel: u32, solid: u32, accent: u32) -> AnyElement {
 impl SettingsView {
     pub(super) fn appearance_page(
         &mut self,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let p = self.prefs.clone();
@@ -204,6 +204,7 @@ impl SettingsView {
                 ),
             ];
         page.push(self.group(None, false, "Color", None, None, color));
+        page.push(self.fonts_group(window, cx));
         let translucency = vec![
                 self.row(
                     Some("sidebar-opacity"),

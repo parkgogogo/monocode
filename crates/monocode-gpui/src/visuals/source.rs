@@ -1,6 +1,6 @@
 //! Immutable JavaScript source, highlighted once and drawn a viewport at a time.
 use crate::{
-    markdown::MONO,
+    fonts::CODE,
     syntax::{HighlightRequest, HighlightedDocument},
     theme::content,
 };
@@ -149,7 +149,7 @@ impl Render for SourceView {
                                 .min_w_full()
                                 .text_size(px(12.))
                                 .line_height(px(LINE_HEIGHT))
-                                .font_family(MONO)
+                                .font_family(CODE)
                                 .text_color(content(0.85))
                                 .child(
                                     div()

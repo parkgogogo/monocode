@@ -1791,6 +1791,7 @@ impl TranscriptView {
                     .flex()
                     .flex_col()
                     .items_end()
+                    .font_family(crate::fonts::CONTENT)
                     .text_size(px(14.))
                     .line_height(px(20.))
                     .child(
@@ -4799,7 +4800,8 @@ impl TranscriptView {
                     })
                     .when(user, |d| {
                         // AgentTranscript.tsx: text-sm (14px / 20px), px-3 py-2.
-                        d.line_height(px(20.))
+                        d.font_family(crate::fonts::CONTENT)
+                            .line_height(px(20.))
                             .px_3()
                             .pt(px(if first { 8. } else { 0. }))
                             .pb(px(if last { 8. } else { 0. }))
@@ -5249,9 +5251,15 @@ impl TranscriptView {
             column - px(32.)
         };
         let text = SharedString::from(text.trim_end().to_owned());
+        // Bubbles use the content font at its scaled 14px.
+        let font = gpui::Font {
+            family: crate::fonts::CONTENT.into(),
+            ..window.text_style().font()
+        };
+        let scale = window.text_system().font_size_scale(crate::fonts::CONTENT);
         let run = gpui::TextRun {
             len: text.len(),
-            font: window.text_style().font(),
+            font,
             color: Default::default(),
             background_color: None,
             underline: None,
@@ -5259,7 +5267,7 @@ impl TranscriptView {
         };
         window
             .text_system()
-            .shape_text(text, px(14.), &[run], Some(bubble - px(24.)), None)
+            .shape_text(text, px(14. * scale), &[run], Some(bubble - px(24.)), None)
             .map_or(0, |lines| {
                 lines
                     .iter()

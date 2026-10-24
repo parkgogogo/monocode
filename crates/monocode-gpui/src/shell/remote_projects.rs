@@ -349,7 +349,7 @@ impl Render for RemoteProjectPicker {
                             .px(px(10.))
                             .flex()
                             .items_center()
-                            .font_family("Menlo")
+                            .font_family(crate::fonts::CODE)
                             .child(self.path.clone()),
                     )
                     .child(

@@ -637,6 +637,7 @@ impl SettingsView {
                         if this.select_open == Some(id) {
                             this.select_open = None;
                         } else {
+                            this.fonts.open = None;
                             this.select_open = Some(id);
                             this.select_active = selected.unwrap_or(0);
                             window.focus(&this.select_focus, cx);

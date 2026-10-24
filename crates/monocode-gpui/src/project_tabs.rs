@@ -198,7 +198,12 @@ fn label_width(label: &str, window: &mut Window) -> f32 {
     };
     window
         .text_system()
-        .shape_line(label.to_owned().into(), px(TAB_TEXT_SIZE), &[run], None)
+        .shape_line(
+            label.to_owned().into(),
+            px(TAB_TEXT_SIZE * crate::fonts::inherited_scale(window)),
+            &[run],
+            None,
+        )
         .width
         .as_f32()
         .ceil()

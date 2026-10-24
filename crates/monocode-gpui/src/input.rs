@@ -206,8 +206,11 @@ pub struct Input {
     placeholder: SharedString,
     placeholder_alpha: Option<f32>,
     label: SharedString,
+    /// Unscaled sizes; `text_size` and `row_height` apply the font scale.
     font_size: f32,
     line_height: f32,
+    /// The inherited font alias's size scale, read at layout.
+    font_scale: f32,
     min_height: f32,
     max_height: f32,
     /// A textarea that takes Enter as a newline and submits on Cmd/Ctrl+Enter.
@@ -257,6 +260,7 @@ impl Input {
             label: "Message composer".into(),
             font_size: FONT_SIZE,
             line_height: LINE_HEIGHT,
+            font_scale: 1.,
             min_height: MIN_HEIGHT,
             max_height: MAX_HEIGHT,
             secondary_submit: false,
@@ -594,7 +598,7 @@ impl Input {
         if self.single_line {
             return;
         }
-        let line_height = px(self.line_height);
+        let line_height = px(self.row_height());
         let total = self
             .lines
             .iter()
@@ -689,11 +693,27 @@ impl Input {
     fn range8(&self, r: Range<usize>) -> Range<usize> {
         self.clip_range(self.from16(r.start)..self.from16(r.end))
     }
+    fn text_size(&self) -> f32 {
+        self.font_size * self.font_scale
+    }
+    fn row_height(&self) -> f32 {
+        self.line_height * self.font_scale
+    }
+    /// Follow the font preferences: text inherits an alias whose size scale
+    /// the text system knows. Code layouts measured at the old size are dropped.
+    fn set_font_scale(&mut self, scale: f32) {
+        if self.font_scale != scale {
+            self.font_scale = scale;
+            if let Some(code) = self.code.as_mut() {
+                code.layout_width = None;
+            }
+        }
+    }
     fn line_height(&self) -> Pixels {
         px(if self.single_line {
             self.height
         } else {
-            self.line_height
+            self.row_height()
         })
     }
     fn previous_word(&self) -> usize {
@@ -1337,6 +1357,8 @@ impl Element for InputElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
+        let scale = crate::fonts::inherited_scale(w);
+        self.input.update(cx, |i, _| i.set_font_scale(scale));
         let i = self.input.read(cx);
         if i.single_line || i.content.is_empty() {
             style.size.height = px(i.height).into();
@@ -1344,8 +1366,8 @@ impl Element for InputElement {
         }
         // Grow with the wrapped draft, like the auto-resizing textarea.
         let (text, _) = i.display_text();
-        let font_size = px(i.font_size);
-        let (line_height, min_height, max_height) = (i.line_height, i.min_height, i.max_height);
+        let font_size = px(i.text_size());
+        let (line_height, min_height, max_height) = (i.row_height(), i.min_height, i.max_height);
         let font = w.text_style().font();
         let layout = w.request_measured_layout(style, move |known, available, w, _| {
             let width = known.width.or(match available.width {
@@ -1465,7 +1487,7 @@ impl Element for InputElement {
             .text_system()
             .shape_text(
                 text,
-                px(i.font_size),
+                px(i.text_size()),
                 &runs,
                 (!i.single_line).then_some(bounds.size.width),
                 None,
@@ -1667,7 +1689,7 @@ impl Render for Input {
                 "Composer"
             })
             .when(self.code.is_some(), |d| {
-                d.h_full().font_family(crate::markdown::MONO)
+                d.h_full().font_family(crate::fonts::CODE)
             })
             .track_focus(&self.focus)
             .cursor(if self.code_rail_hovered() {

@@ -100,7 +100,7 @@ impl Section {
             }
             Section::Connections => "Connect your machines and run agents remotely through SSH.",
             Section::Appearance => {
-                "Theme, tint, translucency, workspace layout, and conversation backgrounds."
+                "Theme, tint, fonts, translucency, workspace layout, and conversation backgrounds."
             }
             Section::Keybindings => {
                 "Every shortcut the workspace handles, from the app menu and the key handler."
@@ -128,7 +128,7 @@ impl Section {
             Section::General => "version update sounds notifications notes rail",
             Section::Connections => "ssh remote host machine server environment always on",
             Section::Appearance => {
-                "theme dark light color accent glass blur zoom scale wallpaper rail sidebar"
+                "theme dark light color accent font typography glass blur zoom scale wallpaper rail sidebar"
             }
             Section::Keybindings => "shortcut hotkey keyboard binding",
             Section::Chat => {
@@ -309,6 +309,36 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "colorblind color blind accessibility added removed red green blue orange high contrast changes",
     ),
     ("hue", Section::Appearance, "Hue", "tint color chrome"),
+    (
+        "ui-font",
+        Section::Appearance,
+        "UI font",
+        "font typeface typography family weight bold light interface",
+    ),
+    (
+        "ui-font-size",
+        Section::Appearance,
+        "UI font size",
+        "font text size bigger smaller larger readable px",
+    ),
+    (
+        "content-font",
+        Section::Appearance,
+        "Content font",
+        "font typeface typography family weight messages markdown reading chat",
+    ),
+    (
+        "code-font",
+        Section::Appearance,
+        "Code font",
+        "font typeface monospace mono programming ligatures terminal editor diff",
+    ),
+    (
+        "code-font-size",
+        Section::Appearance,
+        "Code font size",
+        "font text size monospace terminal editor diff px",
+    ),
     (
         "saturation",
         Section::Appearance,

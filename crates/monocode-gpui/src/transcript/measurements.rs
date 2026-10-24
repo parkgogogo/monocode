@@ -7,6 +7,8 @@ struct LayoutStyle {
     rem: Pixels,
     scale: f32,
     reduced_motion: bool,
+    /// Font changes that leave the text style alone, such as a new family.
+    fonts: usize,
 }
 
 #[derive(Default)]
@@ -43,6 +45,7 @@ impl TranscriptView {
             rem: window.rem_size(),
             scale: window.scale_factor(),
             reduced_motion: cx.reduce_motion(),
+            fonts: crate::fonts::generation(cx),
         };
         if self.measurements.style.as_ref() != Some(&style) {
             // GPUI retains measured item heights independently of text styling.

@@ -1176,7 +1176,7 @@ impl Render for ProjectPicker {
                         .flex_1()
                         .max_w(px(112.))
                         .truncate()
-                        .font_family("Menlo")
+                        .font_family(crate::fonts::CODE)
                         .text_size(px(11.))
                         .text_color(content(0.4))
                         .child(pretty_parent(&path)),

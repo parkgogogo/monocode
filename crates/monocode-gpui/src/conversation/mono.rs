@@ -861,6 +861,7 @@ impl Conversation {
                             .self_center()
                             .px_1p5()
                             .py_1()
+                            .font_family(crate::fonts::CONTENT)
                             .child(self.input.clone()),
                     )
                     .child(

@@ -2819,6 +2819,7 @@ impl Conversation {
                             .px_3()
                             .pt(px(14.))
                             .pb(px(14.))
+                            .font_family(crate::fonts::CONTENT)
                             .child(self.completion.clone()),
                     )
                     .child(

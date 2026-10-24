@@ -46,6 +46,16 @@ pub(crate) struct Preferences {
     pub collapsed_project_rail: String,
     pub ui_scale: u32,
     pub show_excluded_files: bool,
+    // Fonts: `None` families are the system font; see `crate::fonts`.
+    pub ui_font_family: Option<String>,
+    pub ui_font_weight: u32,
+    pub ui_font_size: u32,
+    /// `None` family and weight follow the UI font.
+    pub content_font_family: Option<String>,
+    pub content_font_weight: Option<u32>,
+    pub code_font_family: Option<String>,
+    pub code_font_weight: u32,
+    pub code_font_size: u32,
     // Chat
     pub transcript_layout: String,
     pub anchor_prompts: bool,
@@ -127,6 +137,14 @@ impl Default for Preferences {
             collapsed_project_rail: "compact".into(),
             ui_scale: 100,
             show_excluded_files: false,
+            ui_font_family: None,
+            ui_font_weight: crate::fonts::REGULAR,
+            ui_font_size: crate::fonts::DEFAULT_UI_SIZE,
+            content_font_family: None,
+            content_font_weight: None,
+            code_font_family: None,
+            code_font_weight: crate::fonts::REGULAR,
+            code_font_size: crate::fonts::DEFAULT_CODE_SIZE,
             transcript_layout: "chat".into(),
             anchor_prompts: true,
             paced_reveal: true,
@@ -194,6 +212,20 @@ impl Preferences {
         self.chat_background = d.chat_background;
         self.ui_scale = d.ui_scale;
         self.collapsed_project_rail = d.collapsed_project_rail;
+        self.restore_fonts();
+    }
+
+    /// The Fonts group's Reset: every font preference back to its default.
+    pub(crate) fn restore_fonts(&mut self) {
+        let d = Self::default();
+        self.ui_font_family = d.ui_font_family;
+        self.ui_font_weight = d.ui_font_weight;
+        self.ui_font_size = d.ui_font_size;
+        self.content_font_family = d.content_font_family;
+        self.content_font_weight = d.content_font_weight;
+        self.code_font_family = d.code_font_family;
+        self.code_font_weight = d.code_font_weight;
+        self.code_font_size = d.code_font_size;
     }
 }
 

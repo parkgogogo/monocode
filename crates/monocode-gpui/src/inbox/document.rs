@@ -146,6 +146,7 @@ struct Measurements {
     text: TextStyle,
     rem: Pixels,
     scale: f32,
+    fonts: usize,
     images: Vec<bool>,
     bottoms: Vec<Pixels>,
 }
@@ -295,6 +296,7 @@ impl InboxDocument {
                 || layout.text != text
                 || layout.rem != window.rem_size()
                 || layout.scale != window.scale_factor()
+                || layout.fonts != crate::fonts::generation(cx)
                 || layout.images != images
         }) {
             self.layout = Some(Measurements {
@@ -302,6 +304,7 @@ impl InboxDocument {
                 text,
                 rem: window.rem_size(),
                 scale: window.scale_factor(),
+                fonts: crate::fonts::generation(cx),
                 images,
                 bottoms: vec![],
             });

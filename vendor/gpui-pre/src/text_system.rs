@@ -1,9 +1,11 @@
+mod font_alias;
 mod font_fallbacks;
 mod font_features;
 mod line;
 mod line_layout;
 mod line_wrapper;
 
+pub use font_alias::*;
 pub use font_fallbacks::*;
 pub use font_features::*;
 pub use line::*;
@@ -235,6 +237,7 @@ pub struct TextSystem {
     wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<LineWrapper>>>,
     font_runs_pool: Mutex<Vec<Vec<FontRun>>>,
     fallback_font_stack: SmallVec<[Font; 2]>,
+    font_aliases: RwLock<FxHashMap<SharedString, FontAlias>>,
     font_generation: Arc<AtomicUsize>,
     missing_glyph_reporter: Arc<MissingGlyphReporter>,
     missing_glyph_receiver: Mutex<Option<MissingGlyphReceiver>>,
@@ -265,6 +268,7 @@ impl TextSystem {
                 font("DejaVu Sans"),
                 font("Arial"), // macOS, Windows
             ],
+            font_aliases: RwLock::default(),
             font_generation: Arc::default(),
             missing_glyph_reporter: Arc::new(MissingGlyphReporter {
                 generation: missing_glyph_generation.clone(),
@@ -294,10 +298,49 @@ impl TextSystem {
     /// Layouts already in progress may complete against the previous font set.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         self.platform_text_system.add_fonts(fonts)?;
+        self.invalidate_fonts();
+        Ok(())
+    }
+
+    /// Replace the table of virtual font families.
+    ///
+    /// Returns whether the table changed. A change invalidates cached font
+    /// resolution and line layouts, like [`Self::add_fonts`]; windows still
+    /// need a refresh to repaint.
+    pub fn set_font_aliases(
+        &self,
+        aliases: impl IntoIterator<Item = (SharedString, FontAlias)>,
+    ) -> bool {
+        let aliases: FxHashMap<_, _> = aliases.into_iter().collect();
+        {
+            let mut current = self.font_aliases.write();
+            if *current == aliases {
+                return false;
+            }
+            *current = aliases;
+        }
+        self.invalidate_fonts();
+        true
+    }
+
+    /// The size multiplier for text styled with `family`; 1 for concrete families.
+    pub fn font_size_scale(&self, family: &str) -> f32 {
+        self.font_aliases
+            .read()
+            .get(family)
+            .map_or(1., |alias| alias.size_scale)
+    }
+
+    /// Advances whenever installed fonts or font aliases change. Callers that
+    /// cache measured text can include it in their cache keys.
+    pub fn font_generation(&self) -> usize {
+        self.font_generation.load(Ordering::Acquire)
+    }
+
+    fn invalidate_fonts(&self) {
         self.font_ids_by_font.write().clear();
         self.missing_glyph_reporter.reset();
         self.font_generation.fetch_add(1, Ordering::Release);
-        Ok(())
     }
 
     /// Takes the receiver for missing-glyph reports.
@@ -342,12 +385,27 @@ impl TextSystem {
         if let Some(font_id) = font_id {
             font_id
         } else {
-            let font_id = self.platform_text_system.font_id(font);
+            let font_id = self.platform_font_id(font);
             self.font_ids_by_font
                 .write()
                 .insert(font.clone(), clone_font_id_result(&font_id));
             font_id
         }
+    }
+
+    /// Resolves aliases before asking the platform. An alias whose family fails
+    /// to load tries its own fallback before the global fallback stack.
+    fn platform_font_id(&self, font: &Font) -> Result<FontId> {
+        let alias = self.font_aliases.read().get(&font.family).cloned();
+        let Some(alias) = alias else {
+            return self.platform_text_system.font_id(font);
+        };
+        self.platform_text_system
+            .font_id(&alias.resolve(font))
+            .or_else(|err| match alias.fallback(font) {
+                Some(fallback) => self.platform_text_system.font_id(&fallback),
+                None => Err(err),
+            })
     }
 
     /// Get the Font for the Font Id.

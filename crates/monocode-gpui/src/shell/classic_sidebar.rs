@@ -169,6 +169,8 @@ fn change_stat_layout(
     let mut font = gpui::font(crate::fonts::UI);
     font.weight = FontWeight::SEMIBOLD;
     font.features = crate::right_panel::tabular();
+    // Rendered sizes grow with the UI font, so measure at the rendered size.
+    let scale = window.text_system().font_size_scale(crate::fonts::UI);
     let width_at = |text: &str, size: f32| {
         if text.is_empty() {
             return 0.;
@@ -177,7 +179,7 @@ fn change_stat_layout(
             .text_system()
             .shape_line(
                 text.to_owned().into(),
-                px(size),
+                px(size * scale),
                 &[gpui::TextRun {
                     len: text.len(),
                     font: font.clone(),

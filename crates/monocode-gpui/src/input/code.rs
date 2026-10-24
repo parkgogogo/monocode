@@ -39,7 +39,7 @@ pub(super) struct Code {
     undo: Vec<(SharedString, Range<usize>)>,
     redo: Vec<(SharedString, Range<usize>)>,
     wrap: bool,
-    layout_width: Option<Pixels>,
+    pub(super) layout_width: Option<Pixels>,
     tops: Vec<f32>,
     analysis: Arc<Analysis>,
     /// The buffer as of the last change, which `analysis` offsets follow.
@@ -407,10 +407,10 @@ impl Input {
         let height = (code.completions.len().min(10) as f32 * 22.).min(240.);
         let viewport = self.bounds.map_or(400., |b| b.size.height.as_f32());
         let y = (p.y - self.scroll_y).as_f32();
-        let top = if y + self.line_height + height > viewport {
+        let top = if y + self.row_height() + height > viewport {
             (y - height).max(0.)
         } else {
-            y + self.line_height
+            y + self.row_height()
         };
         let first = code.completion_index.saturating_sub(9);
         let viewport_width = self.bounds.map_or(400., |b| b.size.width.as_f32() + gutter);
@@ -703,6 +703,7 @@ impl Input {
         })
     }
     pub(super) fn code_changed(&mut self) {
+        let row_height = self.row_height();
         if let Some(code) = &mut self.code {
             code.completions.clear();
             code.completion_task = None;
@@ -717,7 +718,7 @@ impl Input {
             code.max_width = px(0.);
             code.layout_width = None;
             code.tops = (0..=code.offsets.len())
-                .map(|row| TOP_PADDING + row as f32 * self.line_height)
+                .map(|row| TOP_PADDING + row as f32 * row_height)
                 .collect();
             // Carry the last results through the edit until fresh analysis
             // lands; clearing them would flash the whole buffer uncoloured.
@@ -865,7 +866,7 @@ impl Input {
                 )
             })
             .unwrap_or_default();
-        p + point(px(0.), px(code.top(row, self.line_height)))
+        p + point(px(0.), px(code.top(row, self.row_height())))
     }
     pub(super) fn code_index(&self, p: Point<Pixels>) -> usize {
         let code = self.code.as_ref().unwrap();
@@ -879,14 +880,14 @@ impl Input {
                 code.source_offset(
                     row,
                     line.closest_index_for_position(
-                        point(p.x, p.y - px(code.top(row, self.line_height))),
+                        point(p.x, p.y - px(code.top(row, self.row_height()))),
                         self.line_height(),
                     )
                     .unwrap_or_else(|ix| ix),
                 )
             });
         if let Some((_, line)) = code.visible.iter().find(|(ix, _)| *ix == row) {
-            let local_y = (p.y.as_f32() - code.top(row, self.line_height)).max(0.);
+            let local_y = (p.y.as_f32() - code.top(row, self.row_height())).max(0.);
             let downstream = line_position(
                 line,
                 code.display_offset(row, at),
@@ -895,8 +896,8 @@ impl Input {
             );
             code.affinity.set(Some((
                 at,
-                (local_y / self.line_height).floor()
-                    < (downstream.y.as_f32() / self.line_height).floor(),
+                (local_y / self.row_height()).floor()
+                    < (downstream.y.as_f32() / self.row_height()).floor(),
             )));
         }
         at
@@ -943,8 +944,9 @@ impl Input {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let row_height = self.row_height();
         if let Some(code) = &mut self.code {
-            let delta = e.delta.pixel_delta(px(self.line_height));
+            let delta = e.delta.pixel_delta(px(row_height));
             let height = self.bounds.map_or(px(0.), |b| b.size.height);
             self.scroll_y = (self.scroll_y - delta.y)
                 .max(px(0.))
@@ -978,10 +980,11 @@ impl Input {
             if marker.diagnostic {
                 self.move_to(marker.pos, cx);
             }
+            let row_height = self.row_height();
             let code = self.code.as_mut().unwrap();
             let row = code.row(marker.pos);
             self.scroll_y =
-                px((code.top(row, self.line_height) - rail.size.height.as_f32() / 2.).max(0.));
+                px((code.top(row, row_height) - rail.size.height.as_f32() / 2.).max(0.));
             code.reveal = false;
             w.focus(&self.focus, cx);
         } else {
@@ -1090,7 +1093,7 @@ impl Input {
         let index = code.hovered_change?;
         let change = code.analysis.changes.get(index)?;
         let row = code.row(change.from);
-        let top = (code.top(row, self.line_height) - self.scroll_y.as_f32()).max(0.);
+        let top = (code.top(row, self.row_height()) - self.scroll_y.as_f32()).max(0.);
         Some(
             div()
                 .id("editor-hunk-actions")
@@ -1258,11 +1261,11 @@ fn paint_rail(
         // Git's layer is above the cursor/diagnostic layer in editorGit.ts.
         for change in &code.analysis.changes {
             let row = code.row(change.from);
-            let top = code.top(row, i.line_height);
+            let top = code.top(row, i.row_height());
             let bottom = if change.kind == "del" {
-                top + change.deleted.max(1) as f32 * i.line_height
+                top + change.deleted.max(1) as f32 * i.row_height()
             } else {
-                code.top(code.row(change.to.saturating_sub(1)) + 1, i.line_height)
+                code.top(code.row(change.to.saturating_sub(1)) + 1, i.row_height())
             };
             let bounds = Bounds::new(
                 rail.origin + point(px(3.), px(top / total * height)),
@@ -1335,7 +1338,7 @@ fn plain_line(
             px(font_size),
             &[TextRun {
                 len: text.len(),
-                font: gpui::font(crate::markdown::MONO),
+                font: gpui::font(crate::fonts::CODE),
                 color,
                 background_color: None,
                 underline: None,
@@ -1356,7 +1359,7 @@ fn token_line(
 ) -> WrappedLine {
     let base = TextRun {
         len: 0,
-        font: gpui::font(crate::markdown::MONO),
+        font: gpui::font(crate::fonts::CODE),
         color: crate::theme::content(1.),
         background_color: None,
         underline: None,
@@ -1405,7 +1408,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
     };
     let base = TextRun {
         len: text.len(),
-        font: gpui::font(crate::markdown::MONO),
+        font: gpui::font(crate::fonts::CODE),
         color: crate::theme::content(1.),
         background_color: None,
         underline: None,
@@ -1549,7 +1552,7 @@ fn shape(i: &Input, row: usize, width: Option<Pixels>, w: &mut Window) -> Wrappe
         runs = decorated;
     }
     w.text_system()
-        .shape_text(text, px(i.font_size), &runs, width, None)
+        .shape_text(text, px(i.text_size()), &runs, width, None)
         .unwrap()
         .remove(0)
 }
@@ -1572,6 +1575,8 @@ impl Element for CodeElement {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         style.size.height = relative(1.).into();
+        let scale = crate::fonts::code_scale(cx);
+        self.input.update(cx, |i, _| i.set_font_scale(scale));
         (w.request_layout(style, [], cx), ())
     }
     fn prepaint(
@@ -1602,10 +1607,10 @@ impl Element for CodeElement {
                     .peekable();
                 let sample = w.text_system().shape_line(
                     "M".into(),
-                    px(i.font_size),
+                    px(i.text_size()),
                     &[TextRun {
                         len: 1,
-                        font: gpui::font(crate::markdown::MONO),
+                        font: gpui::font(crate::fonts::CODE),
                         color: crate::theme::content(1.),
                         background_color: None,
                         underline: None,
@@ -1649,7 +1654,7 @@ impl Element for CodeElement {
                                     text,
                                     &tokens,
                                     code.wrap.then_some(width),
-                                    i.font_size,
+                                    i.text_size(),
                                     w,
                                 );
                                 let height = line.size(i.line_height()).height.as_f32();
@@ -1673,7 +1678,7 @@ impl Element for CodeElement {
                     let text = &i.content[start..end];
                     let short = !text.contains('\t') && sample.width * text.len() <= width;
                     y += if !code.wrap || short {
-                        i.line_height
+                        i.row_height()
                     } else {
                         shape(i, row, Some(width), w)
                             .size(i.line_height())
@@ -1709,7 +1714,7 @@ impl Element for CodeElement {
                 i.line_height(),
                 code.affinity.get() == Some((i.cursor(), true)),
             );
-            let y = px(code.top(row, i.line_height)) + p.y;
+            let y = px(code.top(row, i.row_height())) + p.y;
             if y < scroll.y {
                 scroll.y = y;
             }
@@ -1747,7 +1752,7 @@ impl Element for CodeElement {
             .map(|(top, _, text, number, tokens)| {
                 (
                     *top,
-                    token_line(text, tokens, wrap, i.font_size, w),
+                    token_line(text, tokens, wrap, i.text_size(), w),
                     *number,
                 )
             })
@@ -1775,7 +1780,7 @@ impl Element for CodeElement {
         let cursor = i.cursor();
         let selected = i.selection.clone();
         let focused = i.focus.is_focused(w);
-        let line_height = i.line_height;
+        let line_height = i.row_height();
         let code_affinity = code.affinity.get();
         let starts: Vec<_> = state
             .lines
@@ -1895,7 +1900,7 @@ impl Element for CodeElement {
                             } else {
                                 "⌄".len()
                             },
-                            font: gpui::font(crate::markdown::MONO),
+                            font: gpui::font(crate::fonts::CODE),
                             color: crate::theme::content(0.45),
                             background_color: None,
                             underline: None,
@@ -1923,7 +1928,7 @@ impl Element for CodeElement {
                     px(11.),
                     &[TextRun {
                         len,
-                        font: gpui::font(crate::markdown::MONO),
+                        font: gpui::font(crate::fonts::CODE),
                         color: crate::theme::content(0.3),
                         background_color: None,
                         underline: None,
@@ -2089,7 +2094,7 @@ mod tests {
         let height = window
             .update(cx, |i, _, _| {
                 let code = i.code.as_ref().unwrap();
-                assert!(code.tops[1] - code.tops[0] > i.line_height * 2.);
+                assert!(code.tops[1] - code.tops[0] > i.row_height() * 2.);
                 for (at, _) in text
                     .char_indices()
                     .take_while(|(at, _)| *at < text.find('\n').unwrap())
@@ -2110,7 +2115,7 @@ mod tests {
                 assert!(i.cursor() > 0);
                 assert_eq!(
                     i.code_position(i.cursor()).y,
-                    px(TOP_PADDING + i.line_height)
+                    px(TOP_PADDING + i.row_height())
                 );
             })
             .unwrap();
@@ -2128,7 +2133,7 @@ mod tests {
                 assert_eq!(i.content.as_ref(), text);
                 assert_eq!(
                     i.code.as_ref().unwrap().tops[1] - TOP_PADDING,
-                    i.line_height
+                    i.row_height()
                 );
             })
             .unwrap();
@@ -2431,7 +2436,7 @@ mod feature_tests {
                 let code = i.code.as_ref().unwrap();
                 assert_eq!(code.deleted_rows.len(), 1);
                 assert_eq!(code.deleted_rows[0].2, "const value = 1;");
-                assert_eq!(code.tops[0], TOP_PADDING + i.line_height);
+                assert_eq!(code.tops[0], TOP_PADDING + i.row_height());
                 assert_eq!(i.content.as_ref(), "const value = 2;\n");
             })
             .unwrap();

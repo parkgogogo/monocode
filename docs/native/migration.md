@@ -41,7 +41,9 @@ in the repository.
 
 GPUI and its platform crate are pinned to `gpui-pre` 0.3.9. Local Apple renderer
 patches cover alpha blending, font matching, backdrop blur and shadows. The
-headless Metal regression is documented in [verification](verification.md).
+framework text system resolves the `.MonoUI`, `.MonoContent` and `.MonoCode`
+font aliases that back the Appearance font settings (`crates/monocode-gpui/src/fonts.rs`).
+The headless Metal regression is documented in [verification](verification.md).
 
 The vendored framework/platform crates remove the unused `zed-scap` dependency.
 The native build rejects lockfiles that reintroduce it, and the `screen-capture`

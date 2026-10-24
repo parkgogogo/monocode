@@ -73,6 +73,9 @@ struct StateInner {
     measuring_behavior: ListMeasuringBehavior,
     pending_scroll: Option<PendingScroll>,
     follow_state: FollowState,
+    /// The text system's font generation at the last layout. Measured heights
+    /// depend on fonts, so a change remeasures every item.
+    font_generation: Option<usize>,
 }
 
 /// Deferred scroll adjustment applied after the scroll-top item has been remeasured.
@@ -325,6 +328,7 @@ impl ListState {
             measuring_behavior: ListMeasuringBehavior::default(),
             pending_scroll: None,
             follow_state: FollowState::default(),
+            font_generation: None,
         })));
         this.splice(0..0, item_count);
         this
@@ -411,6 +415,16 @@ impl ListState {
     /// loading), but the item itself still exists at the same index.
     pub fn remeasure_items(&self, range: Range<usize>) {
         self.remeasure_items_with_scroll_anchor(range, ScrollAnchor::Absolute);
+    }
+
+    /// Remeasure every item, keeping the scroll position proportional, when
+    /// installed fonts or font aliases changed since the last layout.
+    fn remeasure_if_fonts_changed(&self, font_generation: usize) {
+        let previous = self.0.borrow_mut().font_generation.replace(font_generation);
+        if previous.is_some_and(|previous| previous != font_generation) {
+            let count = self.item_count();
+            self.remeasure_items_with_scroll_anchor(0..count, ScrollAnchor::Proportional);
+        }
     }
 
     fn remeasure_items_with_scroll_anchor(&self, range: Range<usize>, scroll_anchor: ScrollAnchor) {
@@ -1456,6 +1470,8 @@ impl Element for List {
         window: &mut Window,
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
+        self.state
+            .remeasure_if_fonts_changed(window.text_system().font_generation());
         let layout_id = match self.sizing_behavior {
             ListSizingBehavior::Infer => {
                 let mut style = Style::default();

@@ -218,7 +218,7 @@ impl Render for HarnessUpdates {
                     .child(
                         div()
                             .text_size(px(11.))
-                            .font_family("monospace")
+                            .font_family(crate::fonts::CODE)
                             .text_color(content(0.5))
                             .child(format!("{} → {}", update.installed, update.latest)),
                     )

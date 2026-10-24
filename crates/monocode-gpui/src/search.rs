@@ -553,7 +553,7 @@ impl Render for SearchView {
                             .min_w_0()
                             .max_w(relative(0.45))
                             .truncate()
-                            .font_family("monospace")
+                            .font_family(crate::fonts::CODE)
                             .text_size(px(11.))
                             .text_color(content(0.4))
                             .child(hit.meta.clone()),
