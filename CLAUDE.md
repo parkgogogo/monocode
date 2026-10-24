@@ -69,6 +69,7 @@ build 分支 2026-10-24 以前叫 `mc/migrate-monocode-to-gpui`，和作者分�
 |---|---|---|
 | `CLAUDE.md` | 本文件 | 只是我们自己的工作约定 |
 | `410317ae` / `crates/monocode-gpui/src/frame_log.rs` | `MONOCODE_FRAME_LOG` 重绘帧数读数 | 只用于本地性能排查 |
+| `skills/` | 我们自己的 Claude Code skill | 只给自己用，见下面的 “Skills” |
 
 已经提给作者、或者准备提的开发分支（合并状态以实际为准）：
 
@@ -76,6 +77,20 @@ build 分支 2026-10-24 以前叫 `mc/migrate-monocode-to-gpui`，和作者分�
 |---|---|---|
 | `feat/gpui-font-settings` | UI、正文、代码字体的字族、字重和字号设置 | 未提交 PR，issue 草稿在 `~/labs/monocode-issue-drafts/` |
 | `feat/gpui-font-smoothing` | Font smoothing 开关（叠在字体设置上） | 同上 |
+
+## Skills
+
+我们自己写的 skill 放在 build 分支的 `skills/<名字>/` 下，属于 custom 改动。为了让 Claude Code 在任何目录都能用，在 `~/.claude/skills/` 里放一个指向它的软链接：
+
+```sh
+ln -s ~/labs/monocode/skills/<名字> ~/.claude/skills/<名字>
+```
+
+| skill | 作用 |
+|---|---|
+| `monocode-import` | 把 Claude Code、Codex 或 Pi 的会话（包括当前对话）导入 MonoCode，聊天记录完整显示，下一条消息接着原会话继续。会写真实数据库，用之前先看它的 `SKILL.md` |
+
+skill 的脚本依赖 MonoCode 的内部数据格式。和作者同步后，如果 `crates/monocode-core/src/store/shared/blocks.rs` 或 `sessions` 表结构有改动，要检查 skill 是否需要跟着改，并跑一遍它的测试：`python3 -I -m unittest discover -s skills/monocode-import/scripts`。
 
 ## 和作者同步（定时任务按这个流程执行）
 
