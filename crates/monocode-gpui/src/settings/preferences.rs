@@ -56,6 +56,8 @@ pub(crate) struct Preferences {
     pub code_font_family: Option<String>,
     pub code_font_weight: u32,
     pub code_font_size: u32,
+    // Off renders glyphs without macOS font-smoothing dilation.
+    pub font_smoothing: bool,
     // Chat
     pub transcript_layout: String,
     pub anchor_prompts: bool,
@@ -145,6 +147,7 @@ impl Default for Preferences {
             code_font_family: None,
             code_font_weight: crate::fonts::REGULAR,
             code_font_size: crate::fonts::DEFAULT_CODE_SIZE,
+            font_smoothing: false,
             transcript_layout: "chat".into(),
             anchor_prompts: true,
             paced_reveal: true,
@@ -226,6 +229,7 @@ impl Preferences {
         self.code_font_family = d.code_font_family;
         self.code_font_weight = d.code_font_weight;
         self.code_font_size = d.code_font_size;
+        self.font_smoothing = d.font_smoothing;
     }
 }
 

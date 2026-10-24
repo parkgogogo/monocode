@@ -171,7 +171,7 @@ impl SettingsView {
             window,
             cx,
         );
-        let rows = vec![
+        let mut rows = vec![
             self.row(
                 Some("ui-font"),
                 true,
@@ -207,8 +207,27 @@ impl SettingsView {
                 Some("The base size for code across chats, diffs and the terminal.".into()),
                 vec![code_size],
             ),
-            preview(),
         ];
+        // Glyph dilation only exists in the macOS renderer.
+        if cfg!(target_os = "macos") {
+            rows.push(self.row(
+                Some("font-smoothing"),
+                false,
+                "Font smoothing",
+                Some(
+                    "Thicken text like native macOS apps. Off keeps strokes thin and sharp.".into(),
+                ),
+                vec![self.toggle(
+                    "font-smoothing",
+                    "Font smoothing",
+                    p.font_smoothing,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.font_smoothing = on),
+                )],
+            ));
+        }
+        rows.push(preview());
         let mut defaults = p.clone();
         defaults.restore_fonts();
         let reset = (defaults != p).then(|| {

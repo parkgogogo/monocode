@@ -32,7 +32,8 @@ licensed under Apache-2.0 (LICENSE-APACHE included in each directory).
 Monocode removes the unused zed-scap dependency and its feature links from their
 manifests, and rejects screen-capture builds in gpui-pre/build.rs pending license
 review. Monocode also adds font-family aliases with per-alias weight and size
-scaling to the gpui-pre text system, and remeasures lists when fonts change.
+scaling to the gpui-pre text system, a switch that turns off font-smoothing
+glyph dilation, and remeasures lists when fonts change.
 The retained framework code remains Apache-2.0.
 Unused upstream examples and their demo assets are omitted, together with four
 upstream SVG tests requiring font fixtures absent from the published crate.

@@ -95,7 +95,9 @@ thread_local! {
 pub(crate) fn apply(p: &Preferences, cx: &mut App) {
     let content = p.content_font_family.clone().or(p.ui_font_family.clone());
     WEB.with(|web| *web.borrow_mut() = (content, p.code_font_family.clone()));
-    if cx.text_system().set_font_aliases(aliases(p)) {
+    let aliases_changed = cx.text_system().set_font_aliases(aliases(p));
+    let smoothing_changed = cx.text_system().set_font_smoothing(p.font_smoothing);
+    if aliases_changed || smoothing_changed {
         cx.refresh_windows();
     }
 }

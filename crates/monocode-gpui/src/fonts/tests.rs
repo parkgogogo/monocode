@@ -57,6 +57,9 @@ impl PlatformTextSystem for Recording {
     fn recommended_rendering_mode(&self, id: FontId, size: Pixels) -> TextRenderingMode {
         NoopTextSystem.recommended_rendering_mode(id, size)
     }
+    fn glyph_dilation_for_color(&self, _: gpui::Hsla) -> u8 {
+        4
+    }
 }
 
 fn recording() -> (Arc<Recording>, TextSystem) {
@@ -132,6 +135,40 @@ fn changing_aliases_invalidates_resolution_and_bumps_the_generation() {
 }
 
 #[test]
+fn turning_font_smoothing_off_drops_glyph_dilation() {
+    let (_, text) = recording();
+    let white = gpui::white();
+    assert!(
+        text.font_smoothing(),
+        "the framework keeps platform smoothing"
+    );
+    assert_eq!(text.glyph_dilation_for_color(white), 4);
+
+    assert!(text.set_font_smoothing(false));
+    assert!(!text.set_font_smoothing(false));
+    assert_eq!(text.glyph_dilation_for_color(white), 0);
+
+    assert!(text.set_font_smoothing(true));
+    assert_eq!(text.glyph_dilation_for_color(white), 4);
+}
+
+#[gpui::test]
+fn preferences_turn_font_smoothing_off_by_default(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        apply(&Preferences::default(), cx);
+        assert!(!cx.text_system().font_smoothing());
+        apply(
+            &Preferences {
+                font_smoothing: true,
+                ..Preferences::default()
+            },
+            cx,
+        );
+        assert!(cx.text_system().font_smoothing());
+    });
+}
+
+#[test]
 fn default_preferences_keep_todays_fonts_and_sizes() {
     let [(_, ui), (_, content), (_, code)] = aliases(&Preferences::default());
     for alias in [&ui, &content] {
@@ -177,13 +214,16 @@ fn saved_workspaces_without_font_fields_load_defaults() {
     assert_eq!(p.code_font_size, DEFAULT_CODE_SIZE);
     assert_eq!(p.ui_font_weight, REGULAR);
     assert_eq!(p.content_font_family, None);
+    assert!(!p.font_smoothing);
 
     let mut p = Preferences {
         ui_font_family: Some("Inter".into()),
         code_font_size: 20,
+        font_smoothing: true,
         ..p
     };
     p.restore_appearance();
+    assert!(!p.font_smoothing);
     assert_eq!(aliases(&p), aliases(&Preferences::default()));
 }
 

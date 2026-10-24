@@ -340,6 +340,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "font text size monospace terminal editor diff px",
     ),
     (
+        "font-smoothing",
+        Section::Appearance,
+        "Font smoothing",
+        "font smoothing antialiasing bold thick thin sharp crisp blurry rendering",
+    ),
+    (
         "saturation",
         Section::Appearance,
         "Saturation",

@@ -34,7 +34,7 @@ use std::{
     ops::{Deref, DerefMut, Range},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -239,6 +239,7 @@ pub struct TextSystem {
     fallback_font_stack: SmallVec<[Font; 2]>,
     font_aliases: RwLock<FxHashMap<SharedString, FontAlias>>,
     font_generation: Arc<AtomicUsize>,
+    font_smoothing: AtomicBool,
     missing_glyph_reporter: Arc<MissingGlyphReporter>,
     missing_glyph_receiver: Mutex<Option<MissingGlyphReceiver>>,
 }
@@ -270,6 +271,7 @@ impl TextSystem {
             ],
             font_aliases: RwLock::default(),
             font_generation: Arc::default(),
+            font_smoothing: AtomicBool::new(true),
             missing_glyph_reporter: Arc::new(MissingGlyphReporter {
                 generation: missing_glyph_generation.clone(),
                 sender,
@@ -335,6 +337,20 @@ impl TextSystem {
     /// cache measured text can include it in their cache keys.
     pub fn font_generation(&self) -> usize {
         self.font_generation.load(Ordering::Acquire)
+    }
+
+    /// Let the platform thicken glyph strokes the way native font smoothing does.
+    ///
+    /// On by default. Off rasterizes every glyph without dilation, for crisper
+    /// light-on-dark text. Returns whether the setting changed; windows still
+    /// need a refresh to repaint.
+    pub fn set_font_smoothing(&self, enabled: bool) -> bool {
+        self.font_smoothing.swap(enabled, Ordering::AcqRel) != enabled
+    }
+
+    /// Whether glyphs may be dilated by platform font smoothing.
+    pub fn font_smoothing(&self) -> bool {
+        self.font_smoothing.load(Ordering::Acquire)
     }
 
     fn invalidate_fonts(&self) {
@@ -639,7 +655,10 @@ impl TextSystem {
     }
 
     /// Returns the dilation level to use for a glyph painted in the given color.
-    pub(crate) fn glyph_dilation_for_color(&self, color: Hsla) -> u8 {
+    pub fn glyph_dilation_for_color(&self, color: Hsla) -> u8 {
+        if !self.font_smoothing() {
+            return 0;
+        }
         self.platform_text_system.glyph_dilation_for_color(color)
     }
 
