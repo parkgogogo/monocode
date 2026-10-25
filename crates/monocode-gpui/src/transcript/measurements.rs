@@ -51,6 +51,18 @@ fn prompt_bubble_width(widths: impl Iterator<Item = Pixels>) -> Pixels {
     widths.fold(px(72.), Pixels::max).ceil() + px(24.)
 }
 
+/// The font and size a user bubble renders with: the content alias at its
+/// scaled 14px. Measuring with anything else makes a shared bubble width too
+/// narrow once the UI size or the content family is customised.
+pub(super) fn prompt_font(window: &Window) -> (gpui::Font, Pixels) {
+    let font = gpui::Font {
+        family: crate::fonts::CONTENT.into(),
+        ..window.text_style().font()
+    };
+    let scale = window.text_system().font_size_scale(crate::fonts::CONTENT);
+    (font, px(14. * scale))
+}
+
 impl TranscriptView {
     /// Virtualized chunks share one bubble width, even when only a narrow
     /// continuation is on screen. Single-row prompts keep their natural layout.
@@ -64,6 +76,7 @@ impl TranscriptView {
             return Some(*width);
         }
         let width = if message.attachments.is_empty() {
+            let (font, size) = prompt_font(window);
             prompt_bubble_width(
                 self.rows[message.display_start..]
                     .iter()
@@ -75,7 +88,7 @@ impl TranscriptView {
                     .flat_map(|text| {
                         let run = gpui::TextRun {
                             len: text.len(),
-                            font: window.text_style().font(),
+                            font: font.clone(),
                             color: Default::default(),
                             background_color: None,
                             underline: None,
@@ -83,7 +96,7 @@ impl TranscriptView {
                         };
                         window
                             .text_system()
-                            .shape_text(text, px(14.), &[run], None, None)
+                            .shape_text(text, size, &[run], None, None)
                             .unwrap_or_default()
                     })
                     .map(|line| line.width()),

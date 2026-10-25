@@ -5345,11 +5345,7 @@ impl TranscriptView {
         };
         let text = SharedString::from(text.trim_end().to_owned());
         // Bubbles use the content font at its scaled 14px.
-        let font = gpui::Font {
-            family: crate::fonts::CONTENT.into(),
-            ..window.text_style().font()
-        };
-        let scale = window.text_system().font_size_scale(crate::fonts::CONTENT);
+        let (font, size) = measurements::prompt_font(window);
         let run = gpui::TextRun {
             len: text.len(),
             font,
@@ -5360,7 +5356,7 @@ impl TranscriptView {
         };
         window
             .text_system()
-            .shape_text(text, px(14. * scale), &[run], Some(bubble - px(24.)), None)
+            .shape_text(text, size, &[run], Some(bubble - px(24.)), None)
             .map_or(0, |lines| {
                 lines
                     .iter()
@@ -5766,6 +5762,87 @@ mod scroll_tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn shared_prompt_width_follows_the_content_font_scale(cx: &mut TestAppContext) {
+        // The bubble renders in the content alias at its scaled 14px, so a
+        // larger UI size has to widen the shared chunk width with it. Measuring
+        // at a fixed 14px leaves the bubbles as narrow as before, and the
+        // widest chunk then wraps inside a bubble sized for smaller text.
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let window = cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(900.), px(1000.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| TranscriptView::new()),
+            )
+            .unwrap()
+        });
+        let mut widths = Vec::new();
+        for size in [crate::fonts::DEFAULT_UI_SIZE, 18] {
+            let prefs = crate::settings::Preferences {
+                ui_font_size: size,
+                ..Default::default()
+            };
+            cx.update(|cx| crate::fonts::apply(&prefs, cx));
+            let mut transcript = monocode_core::transcript::Transcript::default();
+            transcript.begin("user");
+            // Newline splitting gives the message several chunks, so the shared
+            // width is in play: one narrow chunk on either side of the widest.
+            transcript.append(&format!(
+                "{}\n{}\n{}",
+                "x\n".repeat(12),
+                "a medium length line",
+                "y\n".repeat(12)
+            ));
+            window
+                .update(cx, |view, _, cx| {
+                    *view = TranscriptView::new();
+                    view.patch(0, transcript.rows, cx);
+                    if !view.expanded_prompts.contains(&0) {
+                        view.toggle_prompt(0, cx);
+                    }
+                    settle(view, cx);
+                })
+                .unwrap();
+            for _ in 0..2 {
+                window.update(cx, |_, _, cx| cx.notify()).unwrap();
+                cx.refresh().unwrap();
+                cx.run_until_parked();
+            }
+            widths.push(
+                window
+                    .update(cx, |_, window, _| {
+                        window
+                            .painted_quads()
+                            .into_iter()
+                            .find(|quad| quad.background == user_bubble_fill().into())
+                            .expect("a painted user bubble")
+                            .bounds
+                            .size
+                            .width
+                            .0
+                            / window.scale_factor()
+                    })
+                    .unwrap(),
+            );
+        }
+        cx.update(|cx| crate::fonts::apply(&crate::settings::Preferences::default(), cx));
+        let scale = 18. / crate::fonts::DEFAULT_UI_SIZE as f32;
+        assert!(
+            widths[1] > widths[0] * (scale - 0.05),
+            "a {scale}x font must widen the shared bubble: {widths:?}"
+        );
+        assert!(
+            widths[1] <= 576.,
+            "the column cap still applies: {widths:?}"
+        );
     }
 
     #[gpui::test]
