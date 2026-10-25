@@ -5784,6 +5784,25 @@ mod scroll_tests {
             )
             .unwrap()
         });
+        let mut transcript = monocode_core::transcript::Transcript::default();
+        transcript.begin("user");
+        // Newline splitting gives the message several chunks, so the shared
+        // width is in play: one narrow chunk on either side of the widest.
+        transcript.append(&format!(
+            "{}\n{}\n{}",
+            "x\n".repeat(12),
+            "a medium length line",
+            "y\n".repeat(12)
+        ));
+        window
+            .update(cx, |view, _, cx| {
+                view.patch(0, transcript.rows, cx);
+                view.toggle_prompt(0, cx);
+                settle(view, cx);
+            })
+            .unwrap();
+        // One view across both sizes, so the width also has to survive the font
+        // change rather than a rebuild from scratch.
         let mut widths = Vec::new();
         for size in [crate::fonts::DEFAULT_UI_SIZE, 18] {
             let prefs = crate::settings::Preferences {
@@ -5791,26 +5810,7 @@ mod scroll_tests {
                 ..Default::default()
             };
             cx.update(|cx| crate::fonts::apply(&prefs, cx));
-            let mut transcript = monocode_core::transcript::Transcript::default();
-            transcript.begin("user");
-            // Newline splitting gives the message several chunks, so the shared
-            // width is in play: one narrow chunk on either side of the widest.
-            transcript.append(&format!(
-                "{}\n{}\n{}",
-                "x\n".repeat(12),
-                "a medium length line",
-                "y\n".repeat(12)
-            ));
-            window
-                .update(cx, |view, _, cx| {
-                    *view = TranscriptView::new();
-                    view.patch(0, transcript.rows, cx);
-                    if !view.expanded_prompts.contains(&0) {
-                        view.toggle_prompt(0, cx);
-                    }
-                    settle(view, cx);
-                })
-                .unwrap();
+            window.update(cx, |view, _, cx| settle(view, cx)).unwrap();
             for _ in 0..2 {
                 window.update(cx, |_, _, cx| cx.notify()).unwrap();
                 cx.refresh().unwrap();
@@ -5835,9 +5835,12 @@ mod scroll_tests {
         }
         cx.update(|cx| crate::fonts::apply(&crate::settings::Preferences::default(), cx));
         let scale = 18. / crate::fonts::DEFAULT_UI_SIZE as f32;
+        // Compare the text box, without the fixed px-3 padding, so the ratio
+        // catches both a missing scale and a doubled one.
+        let ratio = (widths[1] - 24.) / (widths[0] - 24.);
         assert!(
-            widths[1] > widths[0] * (scale - 0.05),
-            "a {scale}x font must widen the shared bubble: {widths:?}"
+            (ratio - scale).abs() < 0.02,
+            "the shared bubble must scale with the content font: {widths:?}"
         );
         assert!(
             widths[1] <= 576.,
