@@ -44,23 +44,40 @@ impl Measurements {
     }
 }
 
-fn prompt_bubble_width(widths: impl Iterator<Item = Pixels>) -> Pixels {
+/// The size a user bubble's text is designed at, before the alias scales it.
+const PROMPT_SIZE: f32 = 14.;
+/// Room for the "Show more" disclosure on a blank last chunk, at scale 1.
+const PROMPT_MIN_TEXT: f32 = 72.;
+
+fn prompt_bubble_width(widths: impl Iterator<Item = Pixels>, scale: f32) -> Pixels {
     // Match StyledText's intrinsic measurement. Without rounding up, adding
     // then subtracting the padding can leave less room than the widest line.
-    // The minimum also leaves room for the disclosure on a blank last chunk.
-    widths.fold(px(72.), Pixels::max).ceil() + px(24.)
+    // The minimum also leaves room for the disclosure on a blank last chunk,
+    // and that button grows with the content font like the text does.
+    widths.fold(px(PROMPT_MIN_TEXT * scale), Pixels::max).ceil() + px(24.)
 }
 
-/// The font and size a user bubble renders with: the content alias at its
-/// scaled 14px. Measuring with anything else makes a shared bubble width too
-/// narrow once the UI size or the content family is customised.
-pub(super) fn prompt_font(window: &Window) -> (gpui::Font, Pixels) {
+/// The font, size and alias scale a user bubble renders with. Measuring with
+/// anything else makes a shared bubble width too narrow once the UI size or the
+/// content family is customised.
+pub(super) struct PromptFont {
+    pub(super) font: gpui::Font,
+    pub(super) size: Pixels,
+    /// What the content alias multiplies absolute sizes by.
+    pub(super) scale: f32,
+}
+
+pub(super) fn prompt_font(window: &Window) -> PromptFont {
     let font = gpui::Font {
         family: crate::fonts::CONTENT.into(),
         ..window.text_style().font()
     };
     let scale = window.text_system().font_size_scale(crate::fonts::CONTENT);
-    (font, px(14. * scale))
+    PromptFont {
+        font,
+        size: px(PROMPT_SIZE * scale),
+        scale,
+    }
 }
 
 impl TranscriptView {
@@ -76,7 +93,7 @@ impl TranscriptView {
             return Some(*width);
         }
         let width = if message.attachments.is_empty() {
-            let (font, size) = prompt_font(window);
+            let prompt = prompt_font(window);
             prompt_bubble_width(
                 self.rows[message.display_start..]
                     .iter()
@@ -88,7 +105,7 @@ impl TranscriptView {
                     .flat_map(|text| {
                         let run = gpui::TextRun {
                             len: text.len(),
-                            font: font.clone(),
+                            font: prompt.font.clone(),
                             color: Default::default(),
                             background_color: None,
                             underline: None,
@@ -96,10 +113,11 @@ impl TranscriptView {
                         };
                         window
                             .text_system()
-                            .shape_text(text, size, &[run], None, None)
+                            .shape_text(text, prompt.size, &[run], None, None)
                             .unwrap_or_default()
                     })
                     .map(|line| line.width()),
+                prompt.scale,
             )
         } else {
             // Attachment chips wrap inside the same column as every text chunk.
@@ -365,8 +383,23 @@ mod tests {
         for base in [104_f32, 232., 488.] {
             let text = px(f32::from_bits(base.to_bits() + 1));
             assert!((text + px(24.)) - px(24.) < text);
-            let bubble = prompt_bubble_width([px(40.), text, px(60.)].into_iter());
+            let bubble = prompt_bubble_width([px(40.), text, px(60.)].into_iter(), 1.);
             assert!(bubble - px(24.) >= text, "the widest line must still fit");
+        }
+    }
+
+    #[test]
+    fn prompt_minimum_width_follows_the_content_font_scale() {
+        // The floor exists to fit the "Show more" disclosure on a blank last
+        // chunk. That button is content text, so it grows with the alias and
+        // the floor has to grow with it.
+        let floor = |scale: f32| prompt_bubble_width([px(10.)].into_iter(), scale) - px(24.);
+        assert_eq!(floor(1.), px(72.));
+        for scale in [16. / 14., 18. / 14.] {
+            assert!(
+                floor(scale) >= px(72. * scale),
+                "a {scale}x font must widen the minimum too"
+            );
         }
     }
 
@@ -396,7 +429,7 @@ mod tests {
                         None,
                     )
                     .unwrap();
-                let width = prompt_bubble_width(natural.iter().map(|line| line.width()));
+                let width = prompt_bubble_width(natural.iter().map(|line| line.width()), 1.);
                 let wrapped = system
                     .shape_text(text, px(14.), &[run], Some(width - px(24.)), None)
                     .unwrap();

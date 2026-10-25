@@ -5345,10 +5345,10 @@ impl TranscriptView {
         };
         let text = SharedString::from(text.trim_end().to_owned());
         // Bubbles use the content font at its scaled 14px.
-        let (font, size) = measurements::prompt_font(window);
+        let prompt = measurements::prompt_font(window);
         let run = gpui::TextRun {
             len: text.len(),
-            font,
+            font: prompt.font,
             color: Default::default(),
             background_color: None,
             underline: None,
@@ -5356,7 +5356,7 @@ impl TranscriptView {
         };
         window
             .text_system()
-            .shape_text(text, size, &[run], Some(bubble - px(24.)), None)
+            .shape_text(text, prompt.size, &[run], Some(bubble - px(24.)), None)
             .map_or(0, |lines| {
                 lines
                     .iter()
