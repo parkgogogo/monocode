@@ -211,8 +211,10 @@ pub(crate) struct Conversation {
     git_action_anchor: AnchorSlot,
     /// Files this session's edit tools changed, across its whole history.
     session_edits: Vec<String>,
-    /// Some of `session_edits` are still uncommitted: the commit pill shows.
-    session_uncommitted: bool,
+    /// Where `session_edits` stand in Git: uncommitted ones show the pill.
+    session_git: monocode_core::git::SessionChanges,
+    /// The session's latest action commit is on no remote yet: the pill offers Push.
+    session_unpushed: bool,
     session_edits_generation: u64,
     branch_anchor: AnchorSlot,
     context_anchor: AnchorSlot,
@@ -645,7 +647,8 @@ impl Conversation {
             workspace_anchor: AnchorSlot::default(),
             git_action_anchor: AnchorSlot::default(),
             session_edits: Vec::new(),
-            session_uncommitted: false,
+            session_git: Default::default(),
+            session_unpushed: false,
             session_edits_generation: 0,
             branch_anchor: AnchorSlot::default(),
             context_anchor: AnchorSlot::default(),
@@ -3620,7 +3623,11 @@ impl Render for Conversation {
                         .fold(panel, |panel, region| panel.ignore(region.clone())),
                 )
             })
-            .child(
+            .child({
+                let pill = self.git_action_pill(cx);
+                let beside = pill.is_some();
+                self.transcript
+                    .update(cx, |t, cx| t.set_jump_beside_pill(beside, cx));
                 div()
                     .relative()
                     .flex_1()
@@ -3630,9 +3637,9 @@ impl Render for Conversation {
                             .clone()
                             .cached(StyleRefinement::default().size_full()),
                     )
-                    // Level with the transcript's jump button, which sits at
+                    // Level with the transcript's jump button, which moves to
                     // the column's other end.
-                    .children(self.git_action_pill(cx).map(|pill| {
+                    .children(pill.map(|pill| {
                         div()
                             .absolute()
                             .bottom(px(8.))
@@ -3648,8 +3655,8 @@ impl Render for Conversation {
                                     .flex()
                                     .child(pill),
                             )
-                    })),
-            )
+                    }))
+            })
             .child(
                 div()
                     .flex_shrink_0()

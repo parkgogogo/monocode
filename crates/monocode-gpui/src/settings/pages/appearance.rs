@@ -260,11 +260,16 @@ impl SettingsView {
             self.row(
                 Some("inset-layout"),
                 true,
-                "New layout",
-                Some("Use the redesigned sidebar and workspace.".into()),
-                vec![self.toggle("inset-layout", "New layout", inset, false, cx, |_, on, cx| {
-                    cx.emit(SettingsEvent::NewLayout(on))
-                })],
+                "Layout",
+                Some("Classic keeps everything in one sidebar. Focused adds a project switcher, workspace tabs and a right panel.".into()),
+                vec![self.segmented(
+                    "inset-layout",
+                    "Layout",
+                    if inset { "focused" } else { "classic" },
+                    &[("classic", "Classic"), ("focused", "Focused")],
+                    cx,
+                    |_, value, cx| cx.emit(SettingsEvent::NewLayout(value == "focused")),
+                )],
             ),
             self.row(
                 Some("interface-scale"),
@@ -307,7 +312,11 @@ impl SettingsView {
                     Some("new-layout-style"),
                     false,
                     "Workspace style",
-                    Some("Choose a rounded card or a full-height boxy workspace.".into()),
+                    Some(if cfg!(target_os = "macos") {
+                        "Choose a rounded card or a full-height boxy workspace. ⌘⌥L switches between them.".into()
+                    } else {
+                        "Choose a rounded card or a full-height boxy workspace. Ctrl+Alt+L switches between them.".into()
+                    }),
                     vec![self.segmented(
                         "new-layout-style",
                         "Workspace style",

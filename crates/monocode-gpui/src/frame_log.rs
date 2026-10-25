@@ -52,9 +52,9 @@ pub(crate) fn start(cx: &mut App) {
                 let notifies = snapshot.notifies;
                 last_tick = snapshot.tick;
                 let mut line = format!(
-                    "{} renders={renders}/s ticks={ticks}/s notifies={notifies}/s active={} clock={} leases={}",
+                    "{} renders={renders}/s ticks={ticks}/s notifies={notifies}/s visible={} clock={} leases={}",
                     chrono::Local::now().format("%H:%M:%S"),
-                    crate::pulse::app_active(cx),
+                    crate::pulse::app_visible(cx),
                     if snapshot.running { "running" } else { "parked" },
                     snapshot.leases.len(),
                 );
