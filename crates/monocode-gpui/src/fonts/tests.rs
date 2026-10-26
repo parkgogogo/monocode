@@ -103,13 +103,13 @@ fn alias_resolves_to_its_family_with_shifted_clamped_weights() {
 fn an_uninstalled_family_falls_back_to_the_system_font() {
     let (platform, text) = recording();
     text.set_font_aliases(ui(FontAlias {
-        fallback: SYSTEM_CODE.into(),
+        fallback: mono().into(),
         ..FontAlias::new("Missing")
     }));
     text.resolve_font(&gpui::font(UI));
     assert_eq!(
         requested(&platform),
-        vec![("Missing".into(), 400.), (SYSTEM_CODE.into(), 400.)]
+        vec![("Missing".into(), 400.), (mono().into(), 400.)]
     );
 }
 
@@ -176,7 +176,7 @@ fn default_preferences_keep_todays_fonts_and_sizes() {
         assert_eq!(alias.size_scale, 1.);
         assert_eq!(alias.weight_offset, 0.);
     }
-    assert_eq!(code.family, SYSTEM_CODE);
+    assert_eq!(code.family, mono());
     assert_eq!(code.size_scale, 1.);
 }
 
@@ -196,7 +196,7 @@ fn content_follows_the_ui_font_until_chosen_and_sizes_clamp() {
     assert_eq!(ui.weight_offset, 100.);
     assert_eq!(
         (code.family.as_ref(), code.fallback.as_ref()),
-        ("JetBrains Mono", SYSTEM_CODE)
+        ("JetBrains Mono", mono())
     );
     assert_eq!(code.size_scale, 1.5);
 
@@ -372,4 +372,27 @@ fn lists_remeasure_proportionally_when_fonts_change(cx: &mut TestAppContext) {
 
     let top = state.logical_scroll_top();
     assert_eq!((top.item_ix, top.offset_in_item), (5, px(80.)));
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|name| name.to_string()).collect()
+}
+
+#[test]
+fn prefers_the_web_stack_order() {
+    let installed = names(&["Ubuntu", "DejaVu Sans Mono", "JetBrainsMono Nerd Font Mono"]);
+    assert_eq!(
+        pick_mono(&installed, || None).as_deref(),
+        Some("JetBrainsMono Nerd Font Mono")
+    );
+}
+
+#[test]
+fn falls_back_to_the_installed_system_alias() {
+    let installed = names(&["Ubuntu", "Iosevka"]);
+    assert_eq!(
+        pick_mono(&installed, || Some("Iosevka".into())).as_deref(),
+        Some("Iosevka")
+    );
+    assert_eq!(pick_mono(&installed, || Some("Missing".into())), None);
 }

@@ -78,6 +78,7 @@ build 分支 2026-10-24 以前叫 `mc/migrate-monocode-to-gpui`，和作者分�
 |---|---|---|
 | `feat/gpui-font-settings` | UI、正文、代码字体的字族、字重和字号设置 | 未提交 PR，issue 草稿在 `~/labs/monocode-issue-drafts/` |
 | `feat/gpui-font-smoothing` | Font smoothing 开关（叠在字体设置上） | 同上 |
+| `fix/gpui-long-user-bubble` | 长用户消息分块后气泡宽度对齐 | 已合并（PR #1142，`ea6c8219`），作者把我们的提交改写成 `abc0c20b` / `90ddf6c2`。让气泡跟着 content 字体缩放的适配（`91350fa0`、`a951292f`、`800afe71`）依赖字体设置，只留在 build 上 |
 
 ## Skills
 

@@ -66,7 +66,7 @@ impl TranscriptView {
             return panel;
         }
         let identity = scope.map_or_else(|| start.to_string(), |scope| format!("{start}:{scope}"));
-        if tool.is_compaction() {
+        if tool.is_milestone() {
             let running = tool.state == ToolState::Running;
             let failed = tool.state == ToolState::Failed;
             let label = tool.summary().0;
@@ -828,6 +828,67 @@ mod tests {
                     .iter()
                     .any(|r| matches!(r.body, Body::Reasoning | Body::Phase { .. }))
             );
+        });
+    }
+
+    #[gpui::test]
+    fn a_settled_lone_step_keeps_its_loader_until_the_next_one_arrives(cx: &mut TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        let row = |role: &str, text: String| Row {
+            role: role.into(),
+            text,
+            first: true,
+            sent_at: None,
+        };
+        let step = |id: &str, state: ToolState| {
+            let mut call = ToolCall::new(id, "Bash");
+            call.input = r#"{"command":"ls"}"#.into();
+            call.state = state;
+            row("tool", serde_json::to_string(&call).unwrap())
+        };
+        let lone = |view: &TranscriptView| {
+            view.rows.iter().find_map(|r| match &r.body {
+                Body::Tool {
+                    group: None, live, ..
+                } => Some(*live),
+                _ => None,
+            })
+        };
+        view.update(cx, |view, cx| {
+            // Inspect the handoff state without waiting for paced prose, and
+            // keep the work expanded so the settled tool row remains visible.
+            view.smooth_reveal = false;
+            view.work_folds.insert(1, true);
+            view.streaming(true, cx);
+            view.patch(
+                0,
+                vec![
+                    row("user", "List files".into()),
+                    step("first", ToolState::Completed),
+                ],
+                cx,
+            );
+            assert_eq!(lone(view), Some(true), "settled but still the live end");
+
+            view.patch(2, vec![step("second", ToolState::Running)], cx);
+            assert!(
+                view.rows
+                    .iter()
+                    .any(|r| matches!(r.body, Body::Phase { .. })),
+                "the second step hands the loader to its group header"
+            );
+
+            view.patch(1, vec![step("first", ToolState::Completed)], cx);
+            view.patch(2, vec![row("assistant", String::new())], cx);
+            assert_eq!(lone(view), Some(true), "an empty answer keeps the wait");
+
+            view.patch(2, vec![row("assistant", "Done".into())], cx);
+            assert_eq!(lone(view), Some(false), "an answer after it ends the wait");
+
+            cx.set_reduce_motion(true);
+            view.work_folds.insert(1, false);
+            view.rebuild(1, cx);
+            assert_eq!(lone(view), None, "collapsed work hides the settled step");
         });
     }
 }

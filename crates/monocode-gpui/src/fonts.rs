@@ -4,7 +4,10 @@
 //! resolves it to the chosen family with its weights shifted.
 use crate::settings::Preferences;
 use gpui::{App, FontAlias, Global, SharedString, Window, px};
-use std::{ops::RangeInclusive, sync::Arc};
+use std::{
+    ops::RangeInclusive,
+    sync::{Arc, OnceLock},
+};
 
 /// Interface chrome: sidebars, tabs, menus, settings.
 pub(crate) const UI: &str = ".MonoUI";
@@ -15,12 +18,76 @@ pub(crate) const CODE: &str = ".MonoCode";
 
 /// GPUI resolves this family to the platform system UI font.
 const SYSTEM_UI: &str = ".SystemUIFont";
-/// The monospace font used when no code font is chosen.
-pub(crate) const SYSTEM_CODE: &str = if cfg!(target_os = "macos") {
-    "Menlo"
-} else {
-    "monospace"
-};
+
+/// GPUI matches family names literally outside macOS, so the CSS generic
+/// `monospace` resolves to nothing there and text falls back to a
+/// proportional sans. Mirror the web build's terminal stack instead.
+const MONO_CANDIDATES: &[&str] = &[
+    "JetBrainsMono NFM",
+    "JetBrainsMono Nerd Font Mono",
+    "JetBrainsMono NF",
+    "MesloLGS NF",
+    "MesloLGS Nerd Font Mono",
+    "FiraCode Nerd Font Mono",
+    "Hack Nerd Font Mono",
+    "CaskaydiaCove Nerd Font Mono",
+    "JetBrains Mono",
+    "Cascadia Mono",
+    "Consolas",
+    "DejaVu Sans Mono",
+    "Ubuntu Mono",
+    "Noto Sans Mono",
+    "Liberation Mono",
+    "Courier New",
+];
+
+static MONO: OnceLock<String> = OnceLock::new();
+
+/// The monospace family for code and the terminal.
+pub(crate) fn mono() -> &'static str {
+    MONO.get().map_or(
+        if cfg!(target_os = "macos") {
+            "Menlo"
+        } else {
+            "monospace"
+        },
+        String::as_str,
+    )
+}
+
+pub(crate) fn init(cx: &App) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    if let Some(family) = pick_mono(&cx.text_system().all_font_names(), system_mono) {
+        let _ = MONO.set(family);
+    }
+}
+
+fn pick_mono(installed: &[String], system: impl FnOnce() -> Option<String>) -> Option<String> {
+    let has = |name: &str| installed.iter().any(|font| font == name);
+    MONO_CANDIDATES
+        .iter()
+        .find(|name| has(name))
+        .map(|name| name.to_string())
+        .or_else(|| system().filter(|name| has(name)))
+}
+
+/// What fontconfig maps the `monospace` alias to, as WebKitGTK does.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn system_mono() -> Option<String> {
+    let output = std::process::Command::new("fc-match")
+        .args(["-f", "%{family[0]}", "monospace"])
+        .output()
+        .ok()?;
+    let name = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+    (output.status.success() && !name.is_empty()).then_some(name)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn system_mono() -> Option<String> {
+    None
+}
 
 pub(crate) const REGULAR: u32 = 400;
 pub(crate) const WEIGHTS: [(u32, &str); 5] = [
@@ -73,7 +140,7 @@ pub(crate) fn aliases(p: &Preferences) -> [(SharedString, FontAlias); 3] {
     );
     let code = alias(
         p.code_font_family.as_deref(),
-        SYSTEM_CODE,
+        mono(),
         p.code_font_weight,
         code_size,
         DEFAULT_CODE_SIZE,

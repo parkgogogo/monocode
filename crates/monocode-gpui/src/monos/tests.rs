@@ -525,15 +525,54 @@ fn overview_activity_returns_to_its_previous_tab_and_uses_the_shared_reveal(
 #[gpui::test]
 fn floating_chat_opens_after_releasing_the_manager_and_shares_the_runtime(cx: &mut TestAppContext) {
     let s = setup(cx);
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
+    cx.update(|cx| {
+        s.manager
+            .update(cx, |m, cx| m.open_floating(s.id.clone(), cx))
+    });
     cx.run_until_parked();
-    cx.update(|cx| s.manager.update(cx, |m, cx| m.open_floating(cx)));
+    cx.update(|cx| {
+        s.manager
+            .update(cx, |m, cx| m.open_floating(s.id.clone(), cx))
+    });
     cx.run_until_parked();
     cx.update(|cx| {
         let manager = s.manager.read(cx);
         assert_eq!(manager.floating.len(), 1);
         assert_eq!(manager.chats.len(), 1);
         assert!(manager.chats.contains_key(&s.id));
+        // The panel owns the chat; the workspace draws a placeholder rather
+        // than the same transcript in a second window.
+        assert!(manager.floating_shows(&s.id, cx));
+    });
+    cx.update(|cx| {
+        s.manager
+            .update(cx, |m, cx| m.hide_floating(&s.id.clone(), cx))
+    });
+    cx.run_until_parked();
+    cx.update(|cx| assert!(!s.manager.read(cx).floating_shows(&s.id, cx)));
+}
+
+#[gpui::test]
+fn floating_chat_leaves_the_workspace_selection_alone(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let other = cx.update(|cx| {
+        s.manager.update(cx, |m, cx| {
+            let before = m.active.clone();
+            let id = m.create_floating(Vec::new(), cx);
+            assert_eq!(
+                m.active, before,
+                "a panel's new Mono stays out of the workspace"
+            );
+            m.open_floating(id.clone(), cx);
+            assert_eq!(m.active, before);
+            id
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let manager = s.manager.read(cx);
+        assert!(manager.floating_shows(&other, cx));
+        assert!(!manager.floating_shows(&s.id, cx));
     });
 }
 
@@ -618,6 +657,86 @@ fn identity_and_context_editors_survive_switches_and_save_to_their_own_files(
     });
 }
 #[gpui::test]
+fn app_receipt_lookup_does_not_wait_for_storage_on_the_ui_thread(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let store = s.store.clone();
+    let (held, acquired) = mpsc::sync_channel(0);
+    let (release, released) = mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let _guard = store.lock().unwrap();
+        held.send(()).unwrap();
+        // A regression must fail rather than hang the whole test suite.
+        released.recv_timeout(Duration::from_secs(2)).is_ok()
+    });
+    acquired.recv().unwrap();
+    let (reply, response) = mpsc::channel();
+    let call = mono::bridge::Call {
+        session: s.session,
+        request_id: "contended-lookup".into(),
+        action: "sessions.list".into(),
+        input: json!({}),
+        reply,
+    };
+    s.window
+        .update(cx, |_, window, cx| {
+            s.manager
+                .update(cx, |manager, cx| manager.app_call(call, window, cx));
+        })
+        .unwrap();
+    assert!(response.try_recv().is_err());
+    let _ = release.send(());
+    assert!(
+        holder.join().unwrap(),
+        "app request blocked the UI waiting for the store"
+    );
+    cx.run_until_parked();
+    assert!(response.try_recv().unwrap().is_ok());
+}
+
+#[gpui::test]
+fn durable_app_receipts_survive_cache_eviction_and_invalid_receipts_do_not_repeat_mutations(
+    cx: &mut TestAppContext,
+) {
+    let s = setup(cx);
+    let input = json!({"name":"Digest","instructions":"Summarize changes","schedule":{"kind":"daily","time":"09:00"}});
+    let first = call(&s, "durable-habit", "habits.add", input.clone(), cx)
+        .try_recv()
+        .unwrap()
+        .unwrap();
+    s.manager.update(cx, |m, _| m.app_results.clear());
+    let retry = call(&s, "durable-habit", "habits.add", input, cx)
+        .try_recv()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first, retry);
+    assert_eq!(habits::load(&s.root, &s.id).unwrap().len(), 1);
+    assert!(
+        call(
+            &s,
+            "durable-habit",
+            "habits.add",
+            json!({"name":"different"}),
+            cx
+        )
+        .try_recv()
+        .unwrap()
+        .is_err()
+    );
+    let key = format!(
+        "mono-app-receipt:{}:{}",
+        s.session,
+        mono::files::content_hash("corrupt-habit")
+    );
+    locked(&s.store)
+        .unwrap()
+        .save_setting(&key, "invalid receipt")
+        .unwrap();
+    let error = call(&s, "corrupt-habit", "habits.add", json!({"name":"Another","instructions":"Summarize changes","schedule":{"kind":"daily","time":"09:00"}}), cx).try_recv().unwrap().unwrap_err();
+    assert!(error.contains("Could not read app result"));
+    assert_eq!(habits::load(&s.root, &s.id).unwrap().len(), 1);
+}
+
+#[gpui::test]
 fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut TestAppContext) {
     let s = setup(cx);
     assert!(
@@ -689,15 +808,28 @@ fn sidebar_hidden_launches_still_list_in_the_mono_panel_after_a_restart(cx: &mut
     cx.update(|cx| {
         assert!(s.manager.read(cx).hidden_session(child));
         owner.update(cx, |shell, _| shell.mono_forget_session(child));
-        assert!(!owner.read(cx).mono_session_views(cx).iter().any(|v| v.id == child));
+        assert!(
+            !owner
+                .read(cx)
+                .mono_session_views(cx)
+                .iter()
+                .any(|v| v.id == child)
+        );
     });
     s.manager.update(cx, |m, cx| m.configure_chat(&s.id, cx));
     cx.run_until_parked();
     cx.update(|cx| {
         let views = owner.read(cx).mono_session_views(cx);
-        let view = views.iter().find(|v| v.id == child).expect("the launch lists again");
+        let view = views
+            .iter()
+            .find(|v| v.id == child)
+            .expect("the launch lists again");
         assert!(view.title.contains("Quiet review"), "{}", view.title);
-        assert!(owner.update(cx, |shell, cx| shell.mono_ensure_session(child, cx)).is_some());
+        assert!(
+            owner
+                .update(cx, |shell, cx| shell.mono_ensure_session(child, cx))
+                .is_some()
+        );
         assert!(s.manager.read(cx).hidden_session(child));
     });
 }
@@ -1583,7 +1715,10 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
             s.manager.update(cx, |m, cx| {
                 m.settings = None;
                 m.overview_tab = OverviewTab::Habits;
-                m.habits = vec![habit("digest", "Morning digest"), habit("report", "Weekly report")];
+                m.habits = vec![
+                    habit("digest", "Morning digest"),
+                    habit("report", "Weekly report"),
+                ];
                 let documents = &mut m.roster.get_mut(&s.id).unwrap().documents;
                 documents.push(document("plan", "Launch plan"));
                 documents.push(document("summary", "Release summary"));
@@ -1604,7 +1739,9 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-habit-digest").is_some());
     assert!(visual.debug_bounds("mono-habit-report").is_none());
 
-    s.manager.update(visual, |m, cx| m.select_overview(OverviewTab::Documents, cx));
+    s.manager.update(visual, |m, cx| {
+        m.select_overview(OverviewTab::Documents, cx)
+    });
     visual.run_until_parked();
     assert!(visual.debug_bounds("mono-document-plan").is_some());
     search(visual, "mono-document-search", "release");

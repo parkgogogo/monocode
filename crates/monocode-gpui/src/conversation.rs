@@ -815,6 +815,12 @@ impl Conversation {
         })
         .detach();
     }
+    /// The quick composer's files, sent with its prompt.
+    pub(crate) fn quick_attach(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        if !paths.is_empty() {
+            self.add_attachments(paths, cx);
+        }
+    }
     pub(crate) fn quick_submit(
         &mut self,
         prompt: String,
@@ -1929,7 +1935,7 @@ impl Conversation {
                 let kind = Kind::from_id(&self.summary.provider);
                 if center.read(cx).book.exists(kind, id) {
                     let profile = center.read(cx).profile(id);
-                    self.switch_usage_account(profile, cx);
+                    self.switch_account(profile, cx);
                 }
             }
             return;
@@ -2190,6 +2196,7 @@ impl Conversation {
                     self.settings.pending_provider_switch =
                         Some(monocode_core::agent::ProviderSwitch {
                             from: self.summary.provider.clone(),
+                            model_label: self.model_label().to_string(),
                             cwd: self.execution_cwd().to_owned(),
                             model: self.model.clone(),
                             model_settings: self.settings.model_settings.clone(),
@@ -3291,7 +3298,7 @@ pub(crate) fn preferred_effort(provider: &str, cx: &gpui::App) -> Option<String>
     cx.try_global::<crate::settings::Preferences>()
         .and_then(|prefs| prefs.provider_efforts.get(provider).cloned())
 }
-fn effort_name(value: &str) -> String {
+pub(crate) fn effort_name(value: &str) -> String {
     match value {
         "default" => "Default",
         "none" => "None",

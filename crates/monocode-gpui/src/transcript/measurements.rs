@@ -16,7 +16,8 @@ pub(super) struct Measurements {
     style: Option<LayoutStyle>,
     viewport: gpui::Size<Pixels>,
     rows: HashMap<usize, Pixels>,
-    prompt_widths: HashMap<usize, Pixels>,
+    /// Bubble widths by message start, with the content they were measured for.
+    prompt_widths: HashMap<usize, (u64, Pixels)>,
     retained: HashMap<(usize, usize), RetainedHeight>,
     frame: u64,
     #[cfg(test)]
@@ -32,52 +33,95 @@ struct RetainedHeight {
 }
 
 impl Measurements {
-    pub(super) fn rows_changed(&mut self, source_start: usize) {
+    pub(super) fn rows_changed(&mut self) {
+        // Prompt widths stay: a rebuilt message checks its fingerprint.
         self.rows.clear();
-        // A suffix rebuild leaves earlier messages and their text unchanged.
-        self.prompt_widths.retain(|start, _| *start < source_start);
+    }
+    /// Heights depend on the viewport. Prompt widths are natural text widths
+    /// and the bubble's `max_w` and flex shrinking handle narrow windows.
+    fn viewport_changed(&mut self) {
+        self.rows.clear();
+        self.retained.clear();
     }
     pub(super) fn clear(&mut self) {
-        self.rows.clear();
+        self.viewport_changed();
         self.prompt_widths.clear();
-        self.retained.clear();
     }
 }
 
-/// The size a user bubble's text is designed at, before the alias scales it.
-const PROMPT_SIZE: f32 = 14.;
-/// Room for the "Show more" disclosure on a blank last chunk, at scale 1.
-const PROMPT_MIN_TEXT: f32 = 72.;
+pub(super) fn prompt_fingerprint(rows: &[UiRow], attachments: &[attachments::Attachment]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut state = std::collections::hash_map::DefaultHasher::new();
+    for row in rows {
+        if let Body::Plain(text) = &row.body {
+            text.hash(&mut state);
+        }
+    }
+    attachments.len().hash(&mut state);
+    for attachment in attachments {
+        attachment.hash_layout(&mut state);
+    }
+    state.finish()
+}
+
+/// The font, size and alias scale a user bubble renders with. Measuring with
+/// anything else makes a shared bubble width too narrow once the UI size or the
+/// content family is customised.
+struct PromptFont {
+    font: gpui::Font,
+    size: Pixels,
+    /// What the content alias multiplies absolute sizes by.
+    scale: f32,
+}
+
+fn prompt_font(window: &Window) -> PromptFont {
+    let scale = window.text_system().font_size_scale(crate::fonts::CONTENT);
+    PromptFont {
+        font: gpui::font(crate::fonts::CONTENT),
+        size: PROMPT_TEXT_SIZE * scale,
+        scale,
+    }
+}
+
+/// Shapes a user bubble's text as render lays it out.
+pub(super) fn shape_prompt(
+    text: SharedString,
+    wrap_width: Option<Pixels>,
+    window: &Window,
+) -> impl Iterator<Item = gpui::WrappedLine> {
+    // The bubble sets the content font; its alias scales the literal size.
+    let prompt = prompt_font(window);
+    let run = gpui::TextRun {
+        len: text.len(),
+        font: prompt.font,
+        color: Default::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_text(text, prompt.size, &[run], wrap_width, None)
+        .unwrap_or_default()
+        .into_iter()
+}
 
 fn prompt_bubble_width(widths: impl Iterator<Item = Pixels>, scale: f32) -> Pixels {
     // Match StyledText's intrinsic measurement. Without rounding up, adding
     // then subtracting the padding can leave less room than the widest line.
     // The minimum also leaves room for the disclosure on a blank last chunk,
     // and that button grows with the content font like the text does.
-    widths.fold(px(PROMPT_MIN_TEXT * scale), Pixels::max).ceil() + px(24.)
-}
-
-/// The font, size and alias scale a user bubble renders with. Measuring with
-/// anything else makes a shared bubble width too narrow once the UI size or the
-/// content family is customised.
-pub(super) struct PromptFont {
-    pub(super) font: gpui::Font,
-    pub(super) size: Pixels,
-    /// What the content alias multiplies absolute sizes by.
-    pub(super) scale: f32,
-}
-
-pub(super) fn prompt_font(window: &Window) -> PromptFont {
-    let font = gpui::Font {
-        family: crate::fonts::CONTENT.into(),
-        ..window.text_style().font()
-    };
-    let scale = window.text_system().font_size_scale(crate::fonts::CONTENT);
-    PromptFont {
-        font,
-        size: px(PROMPT_SIZE * scale),
-        scale,
+    // Text at least as wide as the cap renders exactly as the cap does, so
+    // stop shaping there: pasted logs and code usually reach it at once.
+    let cap = PROMPT_BUBBLE_MAX - PROMPT_PAD_X;
+    let mut widest = PROMPT_DISCLOSURE_MIN * scale;
+    for width in widths {
+        widest = widest.max(width);
+        if widest >= cap {
+            return PROMPT_BUBBLE_MAX;
+        }
     }
+    (widest.ceil() + PROMPT_PAD_X).min(PROMPT_BUBBLE_MAX)
 }
 
 impl TranscriptView {
@@ -89,11 +133,13 @@ impl TranscriptView {
         if !self.chat_layout || message.role != "user" || (row.first && row.last) {
             return None;
         }
-        if let Some(width) = self.measurements.prompt_widths.get(&message.start) {
+        let fingerprint = message.prompt_fingerprint;
+        if let Some((cached, width)) = self.measurements.prompt_widths.get(&message.start)
+            && *cached == fingerprint
+        {
             return Some(*width);
         }
         let width = if message.attachments.is_empty() {
-            let prompt = prompt_font(window);
             prompt_bubble_width(
                 self.rows[message.display_start..]
                     .iter()
@@ -102,26 +148,13 @@ impl TranscriptView {
                         Body::Plain(text) => Some(text.clone()),
                         _ => None,
                     })
-                    .flat_map(|text| {
-                        let run = gpui::TextRun {
-                            len: text.len(),
-                            font: prompt.font.clone(),
-                            color: Default::default(),
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        };
-                        window
-                            .text_system()
-                            .shape_text(text, prompt.size, &[run], None, None)
-                            .unwrap_or_default()
-                    })
+                    .flat_map(|text| shape_prompt(text, None, window))
                     .map(|line| line.width()),
-                prompt.scale,
+                prompt_font(window).scale,
             )
         } else {
             // Attachment chips wrap inside the same column as every text chunk.
-            px(576.)
+            PROMPT_BUBBLE_MAX
         };
         if self.measurements.prompt_widths.len() >= 256 {
             self.measurements.prompt_widths.clear();
@@ -130,7 +163,9 @@ impl TranscriptView {
         {
             self.measurements.fresh_prompt_widths += 1;
         }
-        self.measurements.prompt_widths.insert(message.start, width);
+        self.measurements
+            .prompt_widths
+            .insert(message.start, (fingerprint, width));
         Some(width)
     }
 
@@ -150,7 +185,7 @@ impl TranscriptView {
             self.measurements.clear();
         }
         if self.measurements.viewport != self.viewport.size {
-            self.measurements.clear();
+            self.measurements.viewport_changed();
             self.measurements.viewport = self.viewport.size;
         }
         self.measurements.rows.clear();
@@ -170,7 +205,7 @@ impl TranscriptView {
     ) -> Pixels {
         // The viewport probe can discover a resize after render's follow pass.
         if self.measurements.viewport != self.viewport.size {
-            self.measurements.clear();
+            self.measurements.viewport_changed();
             self.measurements.viewport = self.viewport.size;
         }
         if let Some(height) = self.measurements.rows.get(&ix) {
@@ -305,6 +340,10 @@ mod tests {
     }
 
     fn chat(cx: &mut TestAppContext) -> gpui::WindowHandle<Fixture> {
+        fixture(cx, false)
+    }
+
+    fn fixture(cx: &mut TestAppContext, mono: bool) -> gpui::WindowHandle<Fixture> {
         let window = cx.update(|cx| {
             cx.open_window(
                 WindowOptions {
@@ -317,6 +356,9 @@ mod tests {
                 |_, cx| {
                     let transcript = cx.new(|cx| {
                         let mut view = TranscriptView::new();
+                        if mono {
+                            view.mono_mode("cat", 0xe86b5f, "MonoCat");
+                        }
                         view.visible = false;
                         view.streaming = true;
                         view.smooth_reveal = false;
@@ -389,15 +431,34 @@ mod tests {
     }
 
     #[test]
+    fn prompt_width_stops_measuring_at_the_bubble_cap() {
+        let past_cap = std::iter::from_fn(|| -> Option<Pixels> { panic!("measured past the cap") });
+        let lines = [px(100.), PROMPT_BUBBLE_MAX - PROMPT_PAD_X].into_iter();
+        assert_eq!(
+            prompt_bubble_width(lines.chain(past_cap), 1.),
+            PROMPT_BUBBLE_MAX
+        );
+        assert_eq!(
+            prompt_bubble_width([px(551.5)].into_iter(), 1.),
+            PROMPT_BUBBLE_MAX
+        );
+        assert_eq!(prompt_bubble_width([px(400.2)].into_iter(), 1.), px(425.));
+        assert_eq!(
+            prompt_bubble_width([px(10.)].into_iter(), 1.),
+            PROMPT_DISCLOSURE_MIN + PROMPT_PAD_X
+        );
+    }
+
+    #[test]
     fn prompt_minimum_width_follows_the_content_font_scale() {
         // The floor exists to fit the "Show more" disclosure on a blank last
         // chunk. That button is content text, so it grows with the alias and
         // the floor has to grow with it.
-        let floor = |scale: f32| prompt_bubble_width([px(10.)].into_iter(), scale) - px(24.);
-        assert_eq!(floor(1.), px(72.));
+        let floor = |scale: f32| prompt_bubble_width([px(10.)].into_iter(), scale) - PROMPT_PAD_X;
+        assert_eq!(floor(1.), PROMPT_DISCLOSURE_MIN);
         for scale in [16. / 14., 18. / 14.] {
             assert!(
-                floor(scale) >= px(72. * scale),
+                floor(scale) >= PROMPT_DISCLOSURE_MIN * scale,
                 "a {scale}x font must widen the minimum too"
             );
         }
@@ -410,6 +471,7 @@ mod tests {
             gpui_apple::AppleTextSystem::new(),
         ))));
         for family in [".AppleSystemUIFont", "Helvetica", "Times New Roman"] {
+            let (mut fitted, mut capped) = (0, 0);
             for count in 1..40 {
                 let text: SharedString = format!("{} final word", "iW ".repeat(count)).into();
                 let run = gpui::TextRun {
@@ -423,21 +485,39 @@ mod tests {
                 let natural = system
                     .shape_text(
                         text.clone(),
-                        px(14.),
+                        PROMPT_TEXT_SIZE,
                         std::slice::from_ref(&run),
                         None,
                         None,
                     )
                     .unwrap();
+                let widest = natural
+                    .iter()
+                    .map(|line| line.width())
+                    .fold(px(0.), Pixels::max);
                 let width = prompt_bubble_width(natural.iter().map(|line| line.width()), 1.);
+                if widest >= PROMPT_BUBBLE_MAX - PROMPT_PAD_X {
+                    // A capped bubble wraps its widest line, as render does.
+                    assert_eq!(width, PROMPT_BUBBLE_MAX, "{family}, {count}");
+                    capped += 1;
+                    continue;
+                }
                 let wrapped = system
-                    .shape_text(text, px(14.), &[run], Some(width - px(24.)), None)
+                    .shape_text(
+                        text,
+                        PROMPT_TEXT_SIZE,
+                        &[run],
+                        Some(width - PROMPT_PAD_X),
+                        None,
+                    )
                     .unwrap();
                 assert!(
                     wrapped.iter().all(|line| line.wrap_boundaries.is_empty()),
                     "the widest line must not acquire another line: {family}, {count}"
                 );
+                fitted += 1;
             }
+            assert!(fitted > 0 && capped > 0, "both paths ran for {family}");
         }
     }
 
@@ -506,6 +586,120 @@ mod tests {
             );
             view.split_prompt_width(tail, window).unwrap();
             assert_eq!(view.measurements.fresh_prompt_widths, fresh + 2);
+        });
+    }
+
+    fn prompt_tail(view: &TranscriptView, prompt: usize) -> usize {
+        view.rows
+            .iter()
+            .position(|row| view.messages[row.message].start == prompt && row.last)
+            .unwrap()
+    }
+
+    #[gpui::test]
+    fn mono_prompt_widths_survive_streaming_replies_and_refresh_with_attachments(
+        cx: &mut TestAppContext,
+    ) {
+        let window = fixture(cx, true);
+        probe(window, cx, |view, window, cx| {
+            assert!(view.mono && view.chat_layout);
+            view.visible = false;
+            let mut transcript = monocode_core::transcript::Transcript::default();
+            let prompt = transcript.begin("user");
+            transcript.append(&format!(
+                "A wide prompt line for measurement\n{}",
+                "x\n".repeat(64)
+            ));
+            let assistant = transcript.begin("assistant");
+            transcript.append("Answer");
+            view.expanded_prompts.insert(prompt);
+            view.patch(0, transcript.rows, cx);
+            view.begin_measurements(window, cx);
+            let width = view
+                .split_prompt_width(prompt_tail(view, prompt), window)
+                .unwrap();
+            let fresh = view.measurements.fresh_prompt_widths;
+            for i in 0..10 {
+                for _ in 0..3 {
+                    view.begin_measurements(window, cx);
+                }
+                // Mono rebuilds the whole group, from the prompt that opens it.
+                view.patch(
+                    assistant,
+                    vec![row("assistant", &format!("Answer {i}"))],
+                    cx,
+                );
+                let tail = prompt_tail(view, prompt);
+                assert_eq!(view.split_prompt_width(tail, window), Some(width));
+                assert_eq!(
+                    view.measurements.fresh_prompt_widths, fresh,
+                    "a streaming reply must not measure its prompt again"
+                );
+            }
+            // The manifest after a prompt changes its attachments, not its text.
+            let manifest = Row {
+                role: monocode_core::transcript::attachments::ROLE.into(),
+                text: monocode_core::transcript::attachments::from_paths(&[
+                    std::path::PathBuf::from("/tmp/notes.txt"),
+                ])
+                .to_string(),
+                first: true,
+                sent_at: None,
+            };
+            view.patch(assistant, vec![manifest, row("assistant", "Answer")], cx);
+            assert!(
+                !view.messages[view.rows[prompt_tail(view, prompt)].message]
+                    .attachments
+                    .is_empty()
+            );
+            let tail = prompt_tail(view, prompt);
+            assert_eq!(
+                view.split_prompt_width(tail, window),
+                Some(PROMPT_BUBBLE_MAX)
+            );
+            assert_eq!(view.measurements.fresh_prompt_widths, fresh + 1);
+        });
+    }
+
+    #[gpui::test]
+    fn prompt_widths_survive_viewport_resizes(cx: &mut TestAppContext) {
+        let window = chat(cx);
+        let (prompt, width, viewport, fresh) = probe(window, cx, |view, window, cx| {
+            let mut transcript = monocode_core::transcript::Transcript::default();
+            let prompt = transcript.begin("user");
+            transcript.append(&format!("A wide prompt line\n{}", "x\n".repeat(24)));
+            transcript.begin("assistant");
+            transcript.append("Answer");
+            view.expanded_prompts.insert(prompt);
+            view.patch(0, transcript.rows, cx);
+            view.begin_measurements(window, cx);
+            let width = view
+                .split_prompt_width(prompt_tail(view, prompt), window)
+                .unwrap();
+            (
+                prompt,
+                width,
+                view.viewport.size,
+                view.measurements.fresh_prompt_widths,
+            )
+        });
+        for width in [600., 400., 900.] {
+            cx.simulate_window_resize(window.into(), size(px(width), px(600.)));
+            render(window, cx);
+            render(window, cx);
+        }
+        cx.simulate_window_resize(window.into(), size(px(500.), px(600.)));
+        render(window, cx);
+        probe(window, cx, move |view, window, cx| {
+            view.begin_measurements(window, cx);
+            assert_ne!(view.viewport.size, viewport, "the viewport resized");
+            assert_eq!(view.measurements.viewport, view.viewport.size);
+            let tail = prompt_tail(view, prompt);
+            assert_eq!(view.split_prompt_width(tail, window), Some(width));
+            assert_eq!(
+                view.measurements.fresh_prompt_widths, fresh,
+                "a resize must not measure prompt widths again"
+            );
         });
     }
 

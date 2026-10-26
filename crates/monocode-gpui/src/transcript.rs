@@ -13,10 +13,12 @@ mod mascot;
 mod measurements;
 mod outline;
 pub(crate) mod phases;
+mod provider_switch;
 mod remote_plans;
 pub(crate) mod selection;
 pub(crate) mod tasks;
 mod tools;
+mod user_links;
 mod visuals;
 
 use crate::markdown_model::MarkdownParser;
@@ -35,6 +37,7 @@ use gpui::{
 };
 use monocode_core::tool::{ToolCall, ToolState, tasks::Panel};
 use monocode_core::transcript::Row;
+use monocode_core::user_links::{UserMessageLink, parse_user_message_link};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
@@ -110,6 +113,12 @@ struct Message {
     /// The turn this message belongs to, as `Body::Actions` numbers it.
     turn: usize,
     attachments: Arc<[attachments::Attachment]>,
+    /// A user message's displayed chunks and attachments, which its cached
+    /// bubble width depends on.
+    prompt_fingerprint: u64,
+    /// parseUserMessageLink: the prompt's first web link, with the index of
+    /// the text chunk that holds it.
+    user_link: Option<(usize, Arc<UserMessageLink>)>,
 }
 struct RenderedBlock {
     source: Arc<crate::markdown_model::TopBlock>,
@@ -139,6 +148,8 @@ enum Body {
         call: Box<ToolCall>,
         group: Option<usize>,
         tail: bool,
+        /// Its phase is still the live end of the turn.
+        live: bool,
     },
     Phase {
         title: String,
@@ -185,7 +196,16 @@ const TOP_INSET: f32 = 20.;
 // Saved drafts are presentation rows, outside the provider transcript.
 const SAVED_DRAFT_START: usize = usize::MAX - 1;
 const BOTTOM_INSET: f32 = 40.;
+#[cfg(target_os = "macos")]
 const TOP_FADE: f32 = 24.;
+/// AgentTranscript.tsx's user bubble: `text-sm`, `max-w-[36rem]` and `px-3`.
+/// Measurement, line counting and render share these.
+const PROMPT_TEXT_SIZE: Pixels = px(14.);
+const PROMPT_BUBBLE_MAX: Pixels = px(576.);
+/// Horizontal padding on both sides together.
+const PROMPT_PAD_X: Pixels = px(24.);
+/// Text width that leaves room for "Show less" on a blank last chunk.
+const PROMPT_DISCLOSURE_MIN: Pixels = px(72.);
 /// `.turn-actions-hover`'s 120ms opacity transition, in seconds.
 const HOVER_FADE: f32 = 0.12;
 
@@ -389,13 +409,14 @@ pub(crate) fn mono_work_label(source: &[Row], group: usize) -> String {
     }) else {
         return THINKING[thought.saturating_sub(1) % THINKING.len()].into();
     };
-    if tool.is_compaction() {
-        return if tool.state == ToolState::Running {
-            "Compacting context…"
+    if tool.is_milestone() {
+        return if tool.state != ToolState::Running {
+            "Thinking…".into()
+        } else if tool.is_handoff() {
+            format!("{}…", tool.summary().0)
         } else {
-            "Thinking…"
-        }
-        .into();
+            "Compacting context…".into()
+        };
     }
     match tool.summary().0.as_str() {
         "Run" => "Running command…",
@@ -447,6 +468,7 @@ pub(crate) struct TranscriptView {
     selection: selection::Selection,
     selection_focus: Option<gpui::FocusHandle>,
     links: links::State,
+    work_item_cards: user_links::Cards,
     source: Vec<Row>,
     source_bytes: usize,
     attachment_images: HashMap<String, gpui::Entity<attachments::Photo>>,
@@ -2278,6 +2300,7 @@ impl TranscriptView {
             selection: Default::default(),
             selection_focus: None,
             links: Default::default(),
+            work_item_cards: Default::default(),
             source: Vec::new(),
             source_bytes: 0,
             attachment_images: HashMap::new(),
@@ -3032,6 +3055,7 @@ impl TranscriptView {
                 (None, Arc::default())
             };
             let old = previous.remove(&at).filter(|p| p.role == role);
+            let mut user_link = None;
             let (mut parser, mut markdown_blocks) = old
                 .map(|p| (p.parser, p.markdown_blocks))
                 .unwrap_or_else(|| {
@@ -3157,9 +3181,7 @@ impl TranscriptView {
                     thought_phase: None,
                 });
             }
-            let git_hidden = git_stand_in
-                .as_ref()
-                .is_some_and(|card| card.live());
+            let git_hidden = git_stand_in.as_ref().is_some_and(|card| card.live());
             if !self.mono
                 && !folded
                 && !git_hidden
@@ -3303,6 +3325,7 @@ impl TranscriptView {
                         call: Box::new(tool),
                         group: phase.filter(|_| grouped).map(|group| group.start),
                         tail: phase.is_none_or(|group| group.last == at),
+                        live: active,
                     },
                     message,
                     first: false,
@@ -3403,9 +3426,17 @@ impl TranscriptView {
                         .map(|row| row.text.clone())
                         .collect()
                 };
+                if role == "user" {
+                    user_link = text_rows.iter().enumerate().find_map(|(chunk, text)| {
+                        parse_user_message_link(text).map(|link| (chunk, Arc::new(link)))
+                    });
+                }
                 // `line-clamp-4`: a collapsed message shows its first lines only.
-                let clamped =
-                    role == "user" && !self.expanded_prompts.contains(&at) && text_rows.len() > 1;
+                // A message with a link preview is never clamped, as in React.
+                let clamped = role == "user"
+                    && user_link.is_none()
+                    && !self.expanded_prompts.contains(&at)
+                    && text_rows.len() > 1;
                 if clamped {
                     self.clamped_prompts.insert(at);
                 } else {
@@ -3457,12 +3488,18 @@ impl TranscriptView {
             if self.rows.len() > first {
                 self.rows.last_mut().unwrap().last = true;
             }
+            let prompt_fingerprint = if role == "user" {
+                measurements::prompt_fingerprint(&self.rows[first..], &attachments)
+            } else {
+                0
+            };
             self.messages.push(Message {
                 start: at,
                 display_start: first,
                 role,
                 parser,
                 markdown_blocks,
+                user_link,
                 under_line: has_work && final_answer == Some(at),
                 turn: if self.mono {
                     self.mono_group_start(turn)
@@ -3470,6 +3507,7 @@ impl TranscriptView {
                     turn
                 },
                 attachments,
+                prompt_fingerprint,
             });
             let last_prompt = self.source.iter().rposition(|r| r.is_prompt());
             if self.mono
@@ -3695,7 +3733,7 @@ impl TranscriptView {
         self.index_messages();
         // Preserve surviving indices and scroll offsets while the tail reflows.
         let common = old_count.min(self.rows.len());
-        self.measurements.rows_changed(source_start);
+        self.measurements.rows_changed();
         for ix in display_start..common {
             let (old, after_receipt) = &old_layouts[ix - display_start];
             if !measurements::same_layout(old, &self.rows[ix])
@@ -4711,12 +4749,19 @@ impl TranscriptView {
                     }))
                     .into_any_element()
             }
-            Body::Tool { call, group, tail } => {
-                // A lone running step leads with the spinner its phase header
-                // shows once a second step joins it.
+            Body::Tool {
+                call,
+                group,
+                tail,
+                live,
+            } => {
+                // A lone step leads with the spinner its phase header shows once
+                // a second step joins it. It keeps spinning after it settles,
+                // until whatever comes next arrives, so the hand-off to the
+                // group header never drops the loader.
                 let loading = group.is_none()
-                    && call.state == ToolState::Running
-                    && !call.is_compaction()
+                    && (call.state == ToolState::Running || live)
+                    && !call.is_milestone()
                     && call.panel().is_none()
                     && !cx.reduce_motion();
                 div()
@@ -4866,10 +4911,18 @@ impl TranscriptView {
                     .into_any_element()
             }
             Body::Plain(text) => {
+                // UserLinkPreview: the prompt's first link, drawn in its chunk.
+                let message_link = self.messages[row.message].user_link.clone();
+                let link = message_link
+                    .as_ref()
+                    .filter(|(chunk, _)| user && *chunk + 16 == row.key.1)
+                    .map(|(_, link)| link.clone());
                 let collapsed = !self.expanded_prompts.contains(&message_start);
-                let clamp = user && first && collapsed;
+                let clamp = user && first && collapsed && message_link.is_none();
                 // `overflows`: hidden chunks, or more than four wrapped lines.
+                // React never clamps a message that shows a link preview.
                 let overflows = user
+                    && message_link.is_none()
                     && last
                     && (!first
                         || self.clamped_prompts.contains(&message_start)
@@ -4886,9 +4939,11 @@ impl TranscriptView {
                     })
                     .when(user, |d| {
                         // AgentTranscript.tsx: text-sm (14px / 20px), px-3 py-2.
-                        d.font_family(crate::fonts::CONTENT)
+                        // Measurement shapes this font at the same size.
+                        d.font(gpui::font(crate::fonts::CONTENT))
+                            .text_size(PROMPT_TEXT_SIZE)
                             .line_height(px(20.))
-                            .px_3()
+                            .px(PROMPT_PAD_X * 0.5)
                             .pt(px(if first { 8. } else { 0. }))
                             .pb(px(if last { 8. } else { 0. }))
                             .child(
@@ -4942,32 +4997,37 @@ impl TranscriptView {
                                 .gap(px(6.))
                                 .child(icon(path, 14.).flex_shrink_0().text_color(content(0.6)))
                         })
-                        .child(
-                            div()
-                                .when(clamp, |d| d.line_clamp(4).text_ellipsis())
-                                .child({
-                                    let styled = gpui::StyledText::new(text.clone())
-                                        .with_highlights(markdown::mark_styles(
-                                            &text,
-                                            vec![],
-                                            self.search_match
-                                                .as_ref()
-                                                .map_or("", |(_, q)| q.as_str()),
-                                            self.search_match
-                                                .as_ref()
-                                                .is_some_and(|(start, _)| *start == message_start),
-                                        ));
-                                    let layout = styled.layout().clone();
-                                    let child = styled.into_any_element();
-                                    if let Some(selection) =
-                                        self.text_selection(row.key, message_start, false, cx)
-                                    {
-                                        selection.wrap(text.clone(), layout, child)
-                                    } else {
-                                        child
-                                    }
-                                }),
-                        )
+                        .when_some(link.clone(), |d, link| {
+                            d.child(self.user_link_text(&text, &link, row.key, message_start, cx))
+                        })
+                        .when(link.is_none(), |d| {
+                            d.child(
+                                div()
+                                    .when(clamp, |d| d.line_clamp(4).text_ellipsis())
+                                    .child({
+                                        let styled = gpui::StyledText::new(text.clone())
+                                            .with_highlights(markdown::mark_styles(
+                                                &text,
+                                                vec![],
+                                                self.search_match
+                                                    .as_ref()
+                                                    .map_or("", |(_, q)| q.as_str()),
+                                                self.search_match.as_ref().is_some_and(
+                                                    |(start, _)| *start == message_start,
+                                                ),
+                                            ));
+                                        let layout = styled.layout().clone();
+                                        let child = styled.into_any_element();
+                                        if let Some(selection) =
+                                            self.text_selection(row.key, message_start, false, cx)
+                                        {
+                                            selection.wrap(text.clone(), layout, child)
+                                        } else {
+                                            child
+                                        }
+                                    }),
+                            )
+                        })
                     })
                     .children(
                         self.burst
@@ -5105,6 +5165,11 @@ impl TranscriptView {
             } else {
                 None
             })
+            .children(if first {
+                self.provider_separator(message_start)
+            } else {
+                None
+            })
             .child(
                 div()
                     .id(("row", ix))
@@ -5150,7 +5215,7 @@ impl TranscriptView {
                                 div()
                                     .relative()
                                     .min_w_0()
-                                    .when(user && self.chat_layout, |d| d.max_w(px(576.)))
+                                    .when(user && self.chat_layout, |d| d.max_w(PROMPT_BUBBLE_MAX))
                                     .when_some(prompt_width, |d, width| d.w(width))
                                     .when(user && !self.chat_layout, |d| d.w_full())
                                     .when(!user, |d| d.w_full())
@@ -5339,30 +5404,14 @@ impl TranscriptView {
         // Row padding (`pl-14 pr-4` in the chat layout, `px-4` otherwise),
         // the bubble's 36rem cap and its `px-3`.
         let bubble = if self.chat_layout {
-            (column - px(72.)).min(px(576.))
+            (column - px(72.)).min(PROMPT_BUBBLE_MAX)
         } else {
             column - px(32.)
         };
         let text = SharedString::from(text.trim_end().to_owned());
-        // Bubbles use the content font at its scaled 14px.
-        let prompt = measurements::prompt_font(window);
-        let run = gpui::TextRun {
-            len: text.len(),
-            font: prompt.font,
-            color: Default::default(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        window
-            .text_system()
-            .shape_text(text, prompt.size, &[run], Some(bubble - px(24.)), None)
-            .map_or(0, |lines| {
-                lines
-                    .iter()
-                    .map(|line| line.wrap_boundaries.len() + 1)
-                    .sum()
-            })
+        measurements::shape_prompt(text, Some(bubble - PROMPT_PAD_X), window)
+            .map(|line| line.wrap_boundaries.len() + 1)
+            .sum()
     }
     fn toggle_phase(&mut self, group: usize, open: bool, cx: &mut Context<Self>) {
         self.phase_toggle = Some(group);
@@ -5520,6 +5569,7 @@ impl Render for TranscriptView {
             .children(self.outline(window, cx))
             .children(self.selection_menu(cx))
             .child(self.link_overlays(cx))
+            .children(self.work_item_card(window, cx))
             .when(self.show_jump, |d| {
                 // Centered, or the column's right end when the commit pill
                 // takes the left.
@@ -5609,28 +5659,10 @@ fn paint_edge_fade(bounds: Bounds<Pixels>, begin: bool, window: &mut Window) {
             BOTTOM_INSET * window.scale_factor(),
         ),
     ));
+    // A color overlay cannot mask text without tinting the pane and creating
+    // a seam above the composer. Only the Metal backend supports a real mask.
     #[cfg(not(target_os = "macos"))]
-    if !begin {
-        // Other native backends use an opaque chat pane.
-        for (top, height) in [(true, TOP_FADE as usize), (false, BOTTOM_INSET as usize)] {
-            for y in 0..height {
-                let mut color: gpui::Hsla = rgb(CHAT).into();
-                color.a = 1. - (y as f32 + 0.5) / height as f32;
-                let origin = gpui::point(
-                    bounds.left(),
-                    if top {
-                        bounds.top() + px(y as f32)
-                    } else {
-                        bounds.bottom() - px(y as f32 + 1.)
-                    },
-                );
-                window.paint_quad(gpui::fill(
-                    Bounds::new(origin, size(bounds.size.width, px(1.))),
-                    color,
-                ));
-            }
-        }
-    }
+    let _ = (bounds, begin, window);
 }
 
 #[cfg(test)]
@@ -5837,13 +5869,14 @@ mod scroll_tests {
         let scale = 18. / crate::fonts::DEFAULT_UI_SIZE as f32;
         // Compare the text box, without the fixed px-3 padding, so the ratio
         // catches both a missing scale and a doubled one.
-        let ratio = (widths[1] - 24.) / (widths[0] - 24.);
+        let pad = f32::from(PROMPT_PAD_X);
+        let ratio = (widths[1] - pad) / (widths[0] - pad);
         assert!(
             (ratio - scale).abs() < 0.02,
             "the shared bubble must scale with the content font: {widths:?}"
         );
         assert!(
-            widths[1] <= 576.,
+            widths[1] <= f32::from(PROMPT_BUBBLE_MAX),
             "the column cap still applies: {widths:?}"
         );
     }
