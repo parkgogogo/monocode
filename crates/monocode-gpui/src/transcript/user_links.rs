@@ -79,7 +79,7 @@ impl TranscriptView {
                 .map(|selection| selection.with_text(text.clone())),
         };
         let Some(work) = link.link.github_work_item.clone() else {
-            return pieces.piece(0..text.len());
+            return pieces.lines(0..text.len());
         };
         let url = link.range.clone();
         let line_start = text[..url.start].rfind('\n').map_or(0, |i| i + 1);
@@ -94,19 +94,19 @@ impl TranscriptView {
             .flex()
             .flex_wrap()
             .items_center()
-            .children(words(text, line_start..url.start).map(|range| pieces.piece(range)))
+            .children(words(text, line_start..url.start).map(|range| pieces.word(range)))
             .child(self.work_item_chip(message_start, &link.link.url, &work, cx))
             .when(space_after, |d| d.child(space()))
-            .children(words(text, url.end..line_end).map(|range| pieces.piece(range)));
+            .children(words(text, url.end..line_end).map(|range| pieces.word(range)));
         div()
             .w_full()
             .min_w_0()
             .flex()
             .flex_col()
-            .when(line_start > 0, |d| d.child(pieces.piece(0..line_start - 1)))
+            .when(line_start > 0, |d| d.child(pieces.lines(0..line_start - 1)))
             .child(line)
             .when(line_end < text.len(), |d| {
-                d.child(pieces.piece(line_end + 1..text.len()))
+                d.child(pieces.lines(line_end + 1..text.len()))
             })
             .into_any_element()
     }
@@ -575,40 +575,53 @@ struct Pieces {
     selection: Option<crate::transcript::selection::TextSelection>,
 }
 impl Pieces {
-    /// `range` of the chunk, selectable and search-highlighted in place.
-    fn piece(&self, range: Range<usize>) -> AnyElement {
+    /// Whole lines of the chunk, wrapping at the bubble's width as a plain
+    /// prompt's text does. A flex item's text can't shrink below its unwrapped
+    /// width, so these stay a block.
+    fn lines(&self, range: Range<usize>) -> AnyElement {
+        div()
+            .w_full()
+            .min_w_0()
+            .child(self.text(range))
+            .into_any_element()
+    }
+    /// One word of the link's line; its trailing whitespace is the gap after
+    /// it, as rich_inline's. `min_w_0` lets a word wider than the bubble (a
+    /// run of CJK, a long path) wrap on a line of its own.
+    fn word(&self, range: Range<usize>) -> AnyElement {
         let piece = &self.text[range.clone()];
-        // A word's trailing whitespace is the gap after it, as rich_inline's.
         let word = piece.trim_end_matches([' ', '\t']);
-        let gap = word.len() < piece.len();
-        let end = range.start + word.len();
+        div()
+            .min_w_0()
+            .when(word.len() < piece.len(), |d| d.pr(px(SPACE)))
+            .child(self.text(range.start..range.start + word.len()))
+            .into_any_element()
+    }
+    /// `range` of the chunk, selectable and search-highlighted in place.
+    fn text(&self, range: Range<usize>) -> AnyElement {
         let highlights = self
             .highlights
             .iter()
             .filter_map(|(r, style)| {
-                let (start, stop) = (r.start.max(range.start), r.end.min(end));
+                let (start, stop) = (r.start.max(range.start), r.end.min(range.end));
                 (start < stop).then(|| (start - range.start..stop - range.start, *style))
             })
             .collect::<Vec<_>>();
-        let word: SharedString = word.to_owned().into();
-        let styled = StyledText::new(word.clone()).with_highlights(highlights);
+        let text: SharedString = self.text[range.clone()].to_owned().into();
+        let styled = StyledText::new(text.clone()).with_highlights(highlights);
         let layout = styled.layout().clone();
         let child = styled.into_any_element();
-        let child = match &self.selection {
-            Some(selection) => selection.offset(range.start).wrap(word, layout, child),
+        match &self.selection {
+            Some(selection) => selection.offset(range.start).wrap(text, layout, child),
             None => child,
-        };
-        div()
-            .flex()
-            .child(child)
-            .when(gap, |d| d.child(space()))
-            .into_any_element()
+        }
     }
 }
 
 /// One space at the bubble's 14px text.
+const SPACE: f32 = 14. * 0.25;
 fn space() -> gpui::Div {
-    div().w(px(14. * 0.25)).h(px(1.))
+    div().w(px(SPACE)).h(px(1.))
 }
 
 /// Byte ranges of `range`'s words, each with the spaces that follow it.
@@ -796,5 +809,84 @@ mod tests {
                 assert!(view.work_item_cards.open.is_none())
             })
             .unwrap();
+    }
+
+    /// Each row's height for a prompt of `text`, shown in full in a 1200px
+    /// window, where the bubble is at its widest.
+    fn prompt_row_heights(cx: &mut TestAppContext, text: &str) -> Vec<Pixels> {
+        let window = cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(1200.), px(900.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| TranscriptView::new()),
+            )
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.expanded_prompts.insert(0);
+                let mut source = monocode_core::transcript::Transcript::default();
+                source.begin("user");
+                source.append(text);
+                view.patch(0, source.rows, cx);
+                view.visible = true;
+            })
+            .unwrap();
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                (0..view.rows.len())
+                    .map(|ix| view.list.bounds_for_item(ix).unwrap().size.height)
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    /// A prompt with `scheme` in place of the link's `https`, so that `hxxps`
+    /// draws the same text as a plain prompt.
+    fn prompt(template: &str, scheme: &str) -> String {
+        template.replace("{scheme}", scheme)
+    }
+
+    #[gpui::test]
+    fn a_prompt_with_a_link_wraps_its_long_lines_inside_the_bubble(cx: &mut TestAppContext) {
+        // The first chunk (twelve lines) holds the link; long lines all around it.
+        let template = "[补最后一份产物：EXECUTION_RECORD，其余已完成不要重传]\n\n服务端要求 caseTicket 字段（用例执行工单）。本次没有独立的测试执行工单，用户已确认：直接用这条需求的工作项链接充当 caseTicket，不要编造别的工单号。\n\ncaseTicket = {scheme}://project.alipay.com/workItem?workItemId=2026092100119283365\n\n步骤：\n1. 重建 /tmp/dima-artifacts-ad-expo-retry/execution-record.json，内容与上次一致（只写历史里真实执行过的验证，未执行的记为 SKIPPED 或不列）。每条记录都带上 caseTicket 字段。如果服务端仍然拒绝就停下汇报。\n2. 上传：evo req push --upload --files /tmp/dima-artifacts-ad-expo-retry/execution-record.json --artifact-class final --final-type EXECUTION_RECORD --content-type application/json --title 'x'\n3. 用 evo req artifacts list --req-id 2026092100119283365 --json 确认 5 份产物齐全（PRD/SYSTEM_DESIGN/TEST_DESIGN/TEST_CASE/EXECUTION_RECORD）。\n4. 删除 /tmp/dima-artifacts-ad-expo-retry/，确认无残留。\n\n\n汇报：EXECUTION_RECORD 的上传状态 + 报错原文（若失败）、5 份产物清单核对结果、删除了什么。不要动仓库文件，不要提交。";
+        let linked = prompt_row_heights(cx, &prompt(template, "https"));
+        let plain = prompt_row_heights(cx, &prompt(template, "hxxps"));
+        // Unwrapped, the first chunk is its twelve source lines and padding.
+        assert!(plain[0] > px(12. * 20. + 8.), "{plain:?}");
+        // The link's chunk wraps exactly as the same text without a link.
+        assert_eq!(linked[0], plain[0], "{linked:?} vs {plain:?}");
+    }
+
+    #[gpui::test]
+    fn a_prompt_with_a_github_chip_wraps_the_lines_around_it(cx: &mut TestAppContext) {
+        let long = "服务端要求 caseTicket 字段（用例执行工单）。本次没有独立的测试执行工单，用户已确认：直接用这条需求的工作项链接充当 caseTicket，不要编造别的工单号。";
+        let path = "evo req push --upload --files /tmp/dima-artifacts-ad-expo-retry/execution-record.json --artifact-class final --final-type EXECUTION_RECORD --content-type application/json";
+        let tail = (1..=12)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let github = "{scheme}://github.com/acme/wrap-test/pull/1202";
+        // A short link line: the chip's row is one line, like the plain text's.
+        let template = format!("{long}\n{path}\n{github} please review\n{long}\n{path}\n{tail}");
+        let linked = prompt_row_heights(cx, &prompt(&template, "https"));
+        let plain = prompt_row_heights(cx, &prompt(&template, "hxxps"));
+        assert!(plain[0] > px(5. * 20. + 8.), "{plain:?}");
+        assert_eq!(linked[0], plain[0], "{linked:?} vs {plain:?}");
+        // A link line longer than the bubble: its words, even an unbroken run
+        // of CJK, wrap inside the bubble rather than run past it.
+        let template = format!("{long}\n{github} {long}{long}\n{path}\n{tail}");
+        let linked = prompt_row_heights(cx, &prompt(&template, "https"));
+        let plain = prompt_row_heights(cx, &prompt(&template, "hxxps"));
+        assert!(linked[0] >= plain[0], "{linked:?} vs {plain:?}");
     }
 }
